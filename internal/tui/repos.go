@@ -8,8 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/vasyakrg/helm-tui/internal/helm"
 	"github.com/vasyakrg/helm-tui/internal/health"
+	"github.com/vasyakrg/helm-tui/internal/helm"
 	"github.com/vasyakrg/helm-tui/internal/index"
 )
 
@@ -90,7 +90,8 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 		s.clampCursor()
 		return s, startHealthCmd(a)
 
-	case healthMsg:		for i := range s.rows {
+	case healthMsg:
+		for i := range s.rows {
 			if s.rows[i].Repo.Name == msg.Result.Repo {
 				s.rows[i].State = msg.Result.State
 				s.rows[i].Latency = msg.Result.Latency

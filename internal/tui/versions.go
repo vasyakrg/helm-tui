@@ -10,11 +10,11 @@ import (
 
 // versionsScreen lists versions of one chart; two can be marked for diff.
 type versionsScreen struct {
-	repo     string
-	chart    index.Chart
-	cursor   int
-	marked   []int // indexes into chart.Versions, oldest selection first
-	status   string
+	repo   string
+	chart  index.Chart
+	cursor int
+	marked []int // indexes into chart.Versions, oldest selection first
+	status string
 }
 
 func newVersionsScreen(repo string, chart index.Chart) *versionsScreen {

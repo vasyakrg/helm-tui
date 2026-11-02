@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/vasyakrg/helm-tui/internal/helm"
 	"github.com/vasyakrg/helm-tui/internal/health"
+	"github.com/vasyakrg/helm-tui/internal/helm"
 )
 
 // HelmAPI is the subset of *helm.Client the TUI needs.
@@ -107,8 +107,8 @@ func New(d Deps) tea.Model {
 	return &app{deps: d, stack: []screen{newReposScreen()}}
 }
 
-func (a *app) top() screen       { return a.stack[len(a.stack)-1] }
-func (a *app) push(s screen)     { a.stack = append(a.stack, s) }
+func (a *app) top() screen   { return a.stack[len(a.stack)-1] }
+func (a *app) push(s screen) { a.stack = append(a.stack, s) }
 func (a *app) replaceTop(s screen) {
 	a.stack[len(a.stack)-1] = s
 }

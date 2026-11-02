@@ -13,16 +13,16 @@ var (
 	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
 	normalStyle   = lipgloss.NewStyle()
 
-	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+	failStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	checkingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 
-	addedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
-	removedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	addedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+	removedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	modifiedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	contextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	contextStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	hintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 )
