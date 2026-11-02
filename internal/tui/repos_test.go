@@ -34,17 +34,34 @@ type fakeHelm struct {
 	removed    []string
 	updated    []string
 	err        error
+	addErr     error
 	updateErrs map[string]error
 }
 
 func (f *fakeHelm) List(context.Context) ([]helm.Repo, error) { return f.repos, f.err }
 func (f *fakeHelm) Add(_ context.Context, a helm.AddArgs) error {
 	f.added = append(f.added, a)
+	if f.addErr != nil {
+		return f.addErr
+	}
+	if f.err == nil {
+		f.repos = append(f.repos, helm.Repo{Name: a.Name, URL: a.URL})
+	}
 	return f.err
 }
 func (f *fakeHelm) Remove(_ context.Context, name string) error {
 	f.removed = append(f.removed, name)
-	return f.err
+	if f.err != nil {
+		return f.err
+	}
+	var left []helm.Repo
+	for _, r := range f.repos {
+		if r.Name != name {
+			left = append(left, r)
+		}
+	}
+	f.repos = left
+	return nil
 }
 func (f *fakeHelm) Update(_ context.Context, name, _ string) error {
 	f.updated = append(f.updated, name)
@@ -122,6 +139,12 @@ func key(s string) tea.Msg {
 		return tea.KeyPressMsg{Code: tea.KeyTab}
 	case "ctrl+u":
 		return tea.KeyPressMsg{Code: 0x15} // ctrl+u
+	case "ctrl+d":
+		return tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
+	case "backspace":
+		return tea.KeyPressMsg{Code: tea.KeyBackspace}
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	default:
 		return tea.KeyPressMsg{Code: rune(s[0]), Text: s}
 	}
@@ -166,12 +189,12 @@ func TestRepos_StatusUpdatesFromHealthMsg(t *testing.T) {
 	if !contains(a.top().View(), "…") {
 		t.Error("checking mark missing")
 	}
-	a = send(t, a, healthMsg{Result: health.Result{Repo: "r1", State: health.OK, Latency: 123 * time.Millisecond}})
+	a = send(t, a, healthMsg{Gen: rootRepos(a).healthGen, Result: health.Result{Repo: "r1", State: health.OK, Latency: 123 * time.Millisecond}})
 	v := a.top().View()
 	if !contains(v, "●") || !contains(v, "123ms") {
 		t.Errorf("ok status missing:\n%s", v)
 	}
-	a = send(t, a, healthMsg{Result: health.Result{Repo: "r1", State: health.Fail, Reason: "timeout"}})
+	a = send(t, a, healthMsg{Gen: rootRepos(a).healthGen, Result: health.Result{Repo: "r1", State: health.Fail, Reason: "timeout"}})
 	if !contains(a.top().View(), "✕") || !contains(a.top().View(), "timeout") {
 		t.Errorf("fail status missing:\n%s", a.top().View())
 	}

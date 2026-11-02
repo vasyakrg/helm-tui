@@ -31,17 +31,15 @@ func (s *searchScreen) Init(a *app) tea.Cmd {
 }
 
 // loadIndexes reads all cached indexes; repos without index are skipped.
+// Repo names and the cache dir are captured here, on the UI goroutine: the
+// returned command runs later, when this screen is already on top.
 func (s *searchScreen) loadIndexes(a *app) tea.Cmd {
+	names := a.repoNames()
+	cacheDir := a.deps.Env.RepositoryCache
 	return func() tea.Msg {
-		names := make([]string, 0)
-		if rs, ok := a.top().(*reposScreen); ok {
-			for _, r := range rs.rows {
-				names = append(names, r.Repo.Name)
-			}
-		}
 		var idxs []*index.Index
 		for _, n := range names {
-			if idx, err := index.Load(a.deps.Env.RepositoryCache, n); err == nil {
+			if idx, err := index.Load(cacheDir, n); err == nil {
 				idxs = append(idxs, idx)
 			}
 		}

@@ -153,15 +153,13 @@ func TestUpdateAll_CallsEachRepoAndReportsFailures(t *testing.T) {
 	}
 }
 
-func TestProxyDialog_EmptyClears(t *testing.T) {
+func TestProxyDialog_CtrlDClears(t *testing.T) {
 	deps, _ := fakeDeps(nil, nil)
 	fc := deps.Config.(*fakeConfig)
 	a := New(deps).(*app)
 	f := newProxyForm("r1", "http://p:1")
 	a = send(t, a, pushScreenMsg{Screen: f})
-	// clear the field: select all then delete — simplest is setValue via backspaces
-	a = send(t, a, key("ctrl+u"))
-	a = send(t, a, key("enter"))
+	a = send(t, a, key("ctrl+d"))
 	if v, ok := fc.set["r1"]; !ok || v != "" {
 		t.Errorf("proxy not cleared: %+v", fc.set)
 	}

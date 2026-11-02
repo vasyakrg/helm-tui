@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/vasyakrg/helm-tui/internal/index"
+	"github.com/vasyakrg/helm-tui/internal/proxy"
 )
 
 var errNoCacheDir = errors.New("helm cache dir unknown")
@@ -24,18 +28,30 @@ type escConsumer interface {
 	consumeEsc(*app) bool
 }
 
+// chartsUpdateFailedMsg reports a failed `helm repo update` for the repo.
+type chartsUpdateFailedMsg struct {
+	Repo string
+	Err  error
+}
+
 // chartsScreen lists charts of one repository.
 type chartsScreen struct {
 	row       RepoRow
-	charts    []index.Chart // nil until loaded; empty slice = index exists but no charts
+	charts    []index.Chart
+	loaded    bool // the index was read (charts may legitimately be empty)
 	filter    string
 	filtering bool
+	input     textinput.Model
 	cursor    int
 	err       error
+	updating  bool
+	updateErr string
 }
 
 func newChartsScreen(row RepoRow) *chartsScreen {
-	return &chartsScreen{row: row}
+	ti := textinput.New()
+	ti.Prompt = "filter: "
+	return &chartsScreen{row: row, input: ti}
 }
 
 func (s *chartsScreen) Init(a *app) tea.Cmd {
@@ -64,10 +80,24 @@ func (s *chartsScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 		}
 		s.err = msg.Err
 		s.charts = msg.Charts
+		s.loaded = msg.Err == nil
+		s.updating = false
+		s.updateErr = ""
 		s.clampCursor()
 		return s, nil
 
+	case chartsUpdateFailedMsg:
+		if msg.Repo != s.row.Repo.Name {
+			return s, nil
+		}
+		s.updating = false
+		s.updateErr = "update failed: " + proxy.MaskText(msg.Err.Error())
+		return s, nil
+
 	case tea.KeyPressMsg:
+		if s.filtering {
+			return s.updateFilter(msg)
+		}
 		switch msg.String() {
 		case "j", "down":
 			if s.cursor < len(s.visible())-1 {
@@ -78,15 +108,11 @@ func (s *chartsScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 				s.cursor--
 			}
 		case "/":
-			if !s.filtering {
-				s.filtering = true
-				return s, nil
-			}
+			s.filtering = true
+			s.input.SetValue(s.filter)
+			s.input.CursorEnd()
+			s.input.Focus()
 		case "enter":
-			if s.filtering {
-				s.filtering = false
-				return s, nil
-			}
 			visible := s.visible()
 			if s.cursor < len(visible) {
 				c := visible[s.cursor]
@@ -94,31 +120,63 @@ func (s *chartsScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 					return pushScreenMsg{Screen: newVersionsScreen(s.row.Repo.Name, c)}
 				}
 			}
-		case "backspace":
-			if s.filtering && len(s.filter) > 0 {
-				s.filter = s.filter[:len(s.filter)-1]
-				s.clampCursor()
-				return s, nil
+		case "u":
+			if !s.updating {
+				return s, s.updateCmd(a)
 			}
 		case "q":
-			if !s.filtering {
-				return s, func() tea.Msg { return quitMsg{} }
-			}
-		default:
-			if s.filtering && len(msg.Text) == 1 && msg.Text[0] >= 32 {
-				s.filter += msg.Text
-				s.clampCursor()
-				return s, nil
-			}
+			return s, func() tea.Msg { return quitMsg{} }
 		}
 	}
 	return s, nil
+}
+
+// updateFilter handles keys while the filter input has focus: everything
+// except navigation and Enter goes to the text input.
+func (s *chartsScreen) updateFilter(msg tea.KeyPressMsg) (screen, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		s.filtering = false
+		s.input.Blur()
+		return s, nil
+	case "down":
+		if s.cursor < len(s.visible())-1 {
+			s.cursor++
+		}
+		return s, nil
+	case "up":
+		if s.cursor > 0 {
+			s.cursor--
+		}
+		return s, nil
+	}
+	var cmd tea.Cmd
+	s.input, cmd = s.input.Update(msg)
+	s.filter = s.input.Value()
+	s.clampCursor()
+	return s, cmd
+}
+
+// updateCmd runs `helm repo update <repo>` (with the repo proxy) and reloads
+// the cached index.
+func (s *chartsScreen) updateCmd(a *app) tea.Cmd {
+	s.updating = true
+	s.updateErr = ""
+	repo := s.row.Repo.Name
+	proxyURL := a.proxyFor(repo)
+	return func() tea.Msg {
+		if err := a.deps.Helm.Update(context.Background(), repo, proxyURL); err != nil {
+			return chartsUpdateFailedMsg{Repo: repo, Err: err}
+		}
+		return loadChartsCmd(repo)(a)
+	}
 }
 
 // consumeEsc exits filter mode first; otherwise lets the app pop the screen.
 func (s *chartsScreen) consumeEsc(*app) bool {
 	if s.filtering {
 		s.filtering = false
+		s.input.Blur()
 		return true
 	}
 	return false
@@ -145,23 +203,34 @@ func (s *chartsScreen) visible() []index.Chart {
 }
 
 func (s *chartsScreen) View() string {
-	if s.err != nil {
-		return errStyle.Render("index not found, press u to update the repository")
+	var b strings.Builder
+	if s.updating {
+		b.WriteString(dimStyle.Render("updating repository…") + "\n")
 	}
-	if s.charts == nil {
-		return "loading charts…"
+	if s.updateErr != "" {
+		b.WriteString(errStyle.Render(s.updateErr) + "\n")
+	}
+	switch {
+	case s.err != nil:
+		b.WriteString(errStyle.Render(chartsErrText(s.err)))
+		return b.String()
+	case !s.loaded:
+		b.WriteString("loading charts…")
+		return b.String()
+	case len(s.charts) == 0:
+		b.WriteString("no charts in this repository index")
+		return b.String()
+	}
+	switch {
+	case s.filtering:
+		b.WriteString(s.input.View() + "\n")
+	case s.filter != "":
+		b.WriteString(dimStyle.Render("filter: "+s.filter) + "\n")
 	}
 	visible := s.visible()
 	if len(visible) == 0 {
-		return "no charts"
-	}
-	var b strings.Builder
-	if s.filter != "" {
-		mark := "filter: " + s.filter
-		if s.filtering {
-			mark += "▌"
-		}
-		b.WriteString(dimStyle.Render(mark) + "\n")
+		b.WriteString("no charts match the filter")
+		return b.String()
 	}
 	for i, c := range visible {
 		prefix := "  "
@@ -179,4 +248,11 @@ func (s *chartsScreen) View() string {
 	return b.String()
 }
 
-const hintCharts = "/ filter  Enter versions  q quit"
+func chartsErrText(err error) string {
+	if errors.Is(err, index.ErrNoIndex) {
+		return "index not found, press u to update the repository"
+	}
+	return fmt.Sprintf("error: %s", proxy.MaskText(err.Error()))
+}
+
+const hintCharts = "/ filter  u update repo  Enter versions  q quit"

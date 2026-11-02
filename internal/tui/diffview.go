@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/vasyakrg/helm-tui/internal/diff"
+	"github.com/vasyakrg/helm-tui/internal/proxy"
 )
 
 // DiffSession runs one chart-pair comparison and owns its temp workspace.
@@ -167,7 +168,7 @@ func (s *diffScreen) View() string {
 	case s.loading:
 		return title + "\n" + "pulling chart versions…"
 	case s.err != nil:
-		return title + "\n" + errStyle.Render("error: "+maskURLCredentials(s.err.Error()))
+		return title + "\n" + errStyle.Render("error: "+proxy.MaskText(s.err.Error()))
 	case len(s.files) == 0:
 		return title + "\n" + "no differences"
 	}

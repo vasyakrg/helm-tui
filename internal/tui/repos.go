@@ -11,6 +11,7 @@ import (
 	"github.com/vasyakrg/helm-tui/internal/health"
 	"github.com/vasyakrg/helm-tui/internal/helm"
 	"github.com/vasyakrg/helm-tui/internal/index"
+	"github.com/vasyakrg/helm-tui/internal/proxy"
 )
 
 // RepoRow is one row of the Repos screen.
@@ -28,7 +29,14 @@ type reposScreen struct {
 	rows    []RepoRow
 	cursor  int
 	loading bool
-	healthCh <-chan health.Result
+	width   int
+
+	// availability check state: healthGen identifies the current run so
+	// results of a superseded run are dropped and never extend a chain.
+	healthGen    int
+	healthCh     <-chan health.Result
+	healthCtx    context.Context
+	healthCancel context.CancelFunc
 }
 
 func newReposScreen() *reposScreen {
@@ -44,7 +52,7 @@ func loadReposCmd(a *app) tea.Cmd {
 	return func() tea.Msg {
 		repos, err := a.deps.Helm.List(context.Background())
 		if err != nil {
-			return opDoneMsg{Err: err}
+			return reposLoadFailedMsg{Err: err}
 		}
 		rows := make([]RepoRow, 0, len(repos))
 		for _, r := range repos {
@@ -59,30 +67,52 @@ func loadReposCmd(a *app) tea.Cmd {
 	}
 }
 
-// startHealthCmd launches the parallel availability check.
-func startHealthCmd(a *app) tea.Cmd {
+// startHealth (re)starts the parallel availability check. Any previous run
+// is cancelled, so at most one result chain is alive at a time.
+func (s *reposScreen) startHealth(a *app) tea.Cmd {
+	if s.healthCancel != nil {
+		s.healthCancel()
+		s.healthCancel = nil
+	}
+	s.healthGen++
 	if a.deps.Health == nil {
 		return nil
 	}
-	rs := a.top().(*reposScreen)
-	repos := make([]helm.Repo, len(rs.rows))
-	for i, r := range rs.rows {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.healthCtx, s.healthCancel = ctx, cancel
+	repos := make([]helm.Repo, len(s.rows))
+	proxies := make(map[string]string, len(s.rows))
+	for i, r := range s.rows {
 		repos[i] = r.Repo
+		proxies[r.Repo.Name] = a.proxyFor(r.Repo.Name)
 	}
-	rs.healthCh = a.deps.Health(context.Background(), repos, a.proxyFor)
-	return waitForHealth(rs.healthCh)
+	s.healthCh = a.deps.Health(ctx, repos, func(name string) string { return proxies[name] })
+	return waitForHealth(ctx, s.healthCh, s.healthGen)
 }
 
-// waitForHealth returns a command yielding the next health result.
-func waitForHealth(ch <-chan health.Result) tea.Cmd {
+// waitForHealth returns a command yielding the next health result of run gen.
+func waitForHealth(ctx context.Context, ch <-chan health.Result, gen int) tea.Cmd {
 	return func() tea.Msg {
-		res, ok := <-ch
-		if !ok {
+		select {
+		case res, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			return healthMsg{Gen: gen, Result: res}
+		case <-ctx.Done():
 			return nil
 		}
-		return healthMsg{Result: res}
 	}
 }
+
+func (s *reposScreen) onClose() {
+	if s.healthCancel != nil {
+		s.healthCancel()
+		s.healthCancel = nil
+	}
+}
+
+func (s *reposScreen) setSize(width, _ int) { s.width = width }
 
 func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -90,9 +120,16 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 		s.rows = msg.Rows
 		s.loading = false
 		s.clampCursor()
-		return s, startHealthCmd(a)
+		return s, s.startHealth(a)
+
+	case reposLoadFailedMsg:
+		s.loading = false
+		return s, nil
 
 	case healthMsg:
+		if msg.Gen != s.healthGen {
+			return s, nil // superseded run
+		}
 		for i := range s.rows {
 			if s.rows[i].Repo.Name == msg.Result.Repo {
 				s.rows[i].State = msg.Result.State
@@ -100,7 +137,7 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 				s.rows[i].Reason = msg.Result.Reason
 			}
 		}
-		return s, waitForHealth(s.healthCh)
+		return s, waitForHealth(s.healthCtx, s.healthCh, s.healthGen)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -121,7 +158,7 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 				s.rows[i].State = health.Checking
 				s.rows[i].Reason = ""
 			}
-			return s, startHealthCmd(a)
+			return s, s.startHealth(a)
 		case "a":
 			return s, func() tea.Msg { return pushScreenMsg{Screen: newAddForm()} }
 		case "d":
@@ -166,7 +203,11 @@ func (s *reposScreen) clampCursor() {
 }
 
 func (s *reposScreen) View() string {
-	return s.view(80)
+	w := s.width
+	if w <= 0 {
+		w = 80
+	}
+	return s.view(w)
 }
 
 func (s *reposScreen) view(width int) string {
@@ -197,7 +238,7 @@ func (s *reposScreen) view(width int) string {
 			prefix = "> "
 			st = selectedStyle
 		}
-		url := truncate(maskURLCredentials(r.Repo.URL), avail)
+		url := truncate(proxy.MaskText(r.Repo.URL), avail)
 
 		charts := dimStyle.Render("—")
 		if r.HasIndex {
@@ -222,25 +263,6 @@ func pad(s string, w int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", w-lipglossWidth(s))
-}
-
-// maskURLCredentials hides user:password in URLs before display.
-func maskURLCredentials(url string) string {
-	i := strings.Index(url, "://")
-	if i < 0 {
-		return url
-	}
-	rest := url[i+3:]
-	at := strings.Index(rest, "@")
-	if at < 0 {
-		return url
-	}
-	head := rest[:at]
-	c := strings.IndexByte(head, ':')
-	if c < 0 {
-		return url
-	}
-	return url[:i+3] + head[:c] + ":***" + rest[at:]
 }
 
 // hintRepos is the bottom hint line of the Repos screen.

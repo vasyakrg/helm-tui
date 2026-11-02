@@ -9,6 +9,7 @@ import (
 
 	"github.com/vasyakrg/helm-tui/internal/health"
 	"github.com/vasyakrg/helm-tui/internal/helm"
+	"github.com/vasyakrg/helm-tui/internal/proxy"
 )
 
 // HelmAPI is the subset of *helm.Client the TUI needs.
@@ -58,8 +59,15 @@ type reposLoadedMsg struct {
 	Rows []RepoRow
 }
 
-// healthMsg delivers one availability check result.
+// reposLoadFailedMsg reports that the repo list could not be loaded.
+type reposLoadFailedMsg struct {
+	Err error
+}
+
+// healthMsg delivers one availability check result. Gen identifies the check
+// run it belongs to; results of a superseded run are dropped.
 type healthMsg struct {
+	Gen    int
 	Result health.Result
 }
 
@@ -69,6 +77,19 @@ type opDoneMsg struct {
 	Err  error
 	// Refresh indicates the repo list should be reloaded.
 	Refresh bool
+	// Source is the form/dialog that started the operation (optional). It is
+	// closed on success and shows the (masked) error on failure.
+	Source screen
+}
+
+// opErrorReceiver is implemented by forms/dialogs that show operation errors.
+type opErrorReceiver interface {
+	setOpError(text string)
+}
+
+// sizeAware screens are told the window size.
+type sizeAware interface {
+	setSize(width, height int)
 }
 
 // statusMsg sets a transient status line.
@@ -108,8 +129,49 @@ func New(d Deps) tea.Model {
 	return &app{deps: d, stack: []screen{newReposScreen()}}
 }
 
-func (a *app) top() screen   { return a.stack[len(a.stack)-1] }
-func (a *app) push(s screen) { a.stack = append(a.stack, s) }
+func (a *app) top() screen { return a.stack[len(a.stack)-1] }
+func (a *app) push(s screen) {
+	a.stack = append(a.stack, s)
+	if sa, ok := s.(sizeAware); ok && a.width > 0 {
+		sa.setSize(a.width, a.height)
+	}
+}
+
+// repoNames returns the names of the repos currently shown on the Repos screen.
+func (a *app) repoNames() []string {
+	names := []string{}
+	for _, s := range a.stack {
+		if rs, ok := s.(*reposScreen); ok {
+			for _, r := range rs.rows {
+				names = append(names, r.Repo.Name)
+			}
+			break
+		}
+	}
+	return names
+}
+
+// removeScreen removes a specific (non-root) screen from the stack wherever
+// it is, notifying it via onClose.
+func (a *app) removeScreen(target screen) {
+	for i := len(a.stack) - 1; i > 0; i-- {
+		if a.stack[i] == target {
+			if c, ok := target.(closer); ok {
+				c.onClose()
+			}
+			a.stack = append(a.stack[:i], a.stack[i+1:]...)
+			return
+		}
+	}
+}
+
+// routeToRoot delivers an async message to the Repos screen (stack bottom)
+// regardless of which screen is on top.
+func (a *app) routeToRoot(msg tea.Msg) tea.Cmd {
+	s, cmd := a.stack[0].Update(msg, a)
+	a.stack[0] = s
+	return cmd
+}
 func (a *app) replaceTop(s screen) {
 	a.stack[len(a.stack)-1] = s
 }
@@ -158,6 +220,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
+		for _, sc := range a.stack {
+			if sa, ok := sc.(sizeAware); ok {
+				sa.setSize(a.width, a.height)
+			}
+		}
 		return a, nil
 
 	case tea.KeyMsg:
@@ -192,14 +259,34 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusSetAt = time.Now()
 		return a, nil
 
+	case reposLoadedMsg:
+		return a, a.routeToRoot(msg)
+
+	case healthMsg:
+		return a, a.routeToRoot(msg)
+
+	case reposLoadFailedMsg:
+		a.status = "error: " + proxy.MaskText(msg.Err.Error())
+		return a, a.routeToRoot(msg)
+
 	case opDoneMsg:
 		if msg.Err != nil {
-			a.status = "error: " + maskURLCredentials(msg.Err.Error())
-		} else if msg.Desc != "" {
-			a.status = msg.Desc
+			text := proxy.MaskText(msg.Err.Error())
+			if r, ok := msg.Source.(opErrorReceiver); ok && a.onStack(msg.Source) {
+				r.setOpError(text)
+			} else {
+				a.status = "error: " + text
+			}
+		} else {
+			if msg.Desc != "" {
+				a.status = msg.Desc
+			}
+			if msg.Source != nil {
+				a.removeScreen(msg.Source)
+			}
 		}
 		if msg.Refresh {
-			return a, a.top().Init(a)
+			return a, loadReposCmd(a)
 		}
 		return a, nil
 	}
@@ -207,6 +294,15 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s, cmd := a.top().Update(msg, a)
 	a.replaceTop(s)
 	return a, cmd
+}
+
+func (a *app) onStack(target screen) bool {
+	for _, s := range a.stack {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) View() tea.View {

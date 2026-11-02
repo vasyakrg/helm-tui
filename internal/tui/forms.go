@@ -33,6 +33,13 @@ type form struct {
 	fields []field
 	focus  int
 	err    string
+	busy   bool // an operation is in flight; Enter is ignored
+}
+
+// setOpError shows a (already masked) operation error and re-enables submit.
+func (f *form) setOpError(text string) {
+	f.err = text
+	f.busy = false
 }
 
 func (f *form) refocus() {
@@ -134,6 +141,9 @@ func (f *addForm) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "enter":
+			if f.busy {
+				return f, nil
+			}
 			return f, f.submit(a)
 		}
 		return f, f.updateFields(msg, a)
@@ -155,6 +165,7 @@ func (f *addForm) submit(a *app) tea.Cmd {
 		}
 	}
 	f.err = ""
+	f.busy = true
 	args := helm.AddArgs{
 		Name:     name,
 		URL:      url,
@@ -169,7 +180,7 @@ func (f *addForm) submit(a *app) tea.Cmd {
 				err = cerr
 			}
 		}
-		return opDoneMsg{Desc: "added " + name, Err: err, Refresh: true}
+		return opDoneMsg{Desc: "added " + name, Err: err, Refresh: true, Source: f}
 	}
 }
 
@@ -180,11 +191,17 @@ func (f *addForm) View() string {
 // confirmDialog asks a yes/no question.
 type confirmDialog struct {
 	title    string
-	onYes    func(*app) tea.Cmd
+	onYes    func(a *app, self screen) tea.Cmd
 	answered bool
+	err      string
 }
 
-func newConfirmDialog(title string, onYes func(*app) tea.Cmd) *confirmDialog {
+func (d *confirmDialog) setOpError(text string) {
+	d.err = text
+	d.answered = false
+}
+
+func newConfirmDialog(title string, onYes func(a *app, self screen) tea.Cmd) *confirmDialog {
 	return &confirmDialog{title: title, onYes: onYes}
 }
 
@@ -199,40 +216,47 @@ func (d *confirmDialog) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	case "y", "Y":
 		if !d.answered {
 			d.answered = true
-			return d, d.onYes(a)
+			d.err = ""
+			return d, d.onYes(a, d)
 		}
 	}
 	return d, nil
 }
 
 func (d *confirmDialog) View() string {
-	return d.title + "\n" + hintStyle.Render("y confirm  esc cancel")
+	out := d.title + "\n"
+	if d.err != "" {
+		out += errStyle.Render(d.err) + "\n"
+	}
+	return out + hintStyle.Render("y confirm  esc cancel")
 }
 
 // newDeleteDialog confirms and performs repo deletion.
 func newDeleteDialog(row RepoRow) *confirmDialog {
 	name := row.Repo.Name
-	return newConfirmDialog("delete repository "+name+"?", func(a *app) tea.Cmd {
+	return newConfirmDialog("delete repository "+name+"?", func(a *app, self screen) tea.Cmd {
 		return func() tea.Msg {
 			err := a.deps.Helm.Remove(context.Background(), name)
 			if err == nil {
 				_ = a.deps.Config.SetProxy(name, "")
 			}
-			return opDoneMsg{Desc: "deleted " + name, Err: err, Refresh: true}
+			return opDoneMsg{Desc: "deleted " + name, Err: err, Refresh: true, Source: self}
 		}
 	})
 }
 
-// proxyForm edits the proxy URL for one repository.
+// proxyForm edits the proxy URL for one repository. The current proxy is
+// shown masked; the input starts empty so a stored password never reaches the
+// screen. Empty Enter keeps the proxy, ctrl+d clears it.
 type proxyForm struct {
 	form
-	repo string
+	repo    string
+	current string // masked
 }
 
 func newProxyForm(repo, current string) *proxyForm {
-	f := &proxyForm{repo: repo}
-	f.fields = []field{newField("proxy", current, false)}
-	f.fields[0].input.SetValue(current)
+	f := &proxyForm{repo: repo, current: proxy.Mask(current)}
+	f.fields = []field{newField("new proxy", "http://, https:// or socks5://", false)}
 	f.refocus()
 	return f
 }
@@ -246,22 +270,33 @@ func (f *proxyForm) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "enter":
-			return f, f.submit(a)
+			if f.busy {
+				return f, nil
+			}
+			if f.value(0) == "" {
+				return f, func() tea.Msg { return popScreenMsg{} } // no change
+			}
+			return f, f.submit(a, f.value(0))
+		case "ctrl+d":
+			if f.busy {
+				return f, nil
+			}
+			return f, f.submit(a, "")
 		}
-		return f, f.updateFields(msg, a)
 	}
 	return f, f.updateFields(msg, a)
 }
 
-func (f *proxyForm) submit(a *app) tea.Cmd {
-	proxyURL := f.value(0)
+// submit stores proxyURL ("" clears the proxy).
+func (f *proxyForm) submit(a *app, proxyURL string) tea.Cmd {
 	if proxyURL != "" {
 		if err := proxy.Validate(proxyURL); err != nil {
-			f.err = err.Error()
+			f.err = proxy.MaskText(err.Error())
 			return nil
 		}
 	}
 	f.err = ""
+	f.busy = true
 	repo := f.repo
 	return func() tea.Msg {
 		err := a.deps.Config.SetProxy(repo, proxyURL)
@@ -269,12 +304,18 @@ func (f *proxyForm) submit(a *app) tea.Cmd {
 		if proxyURL == "" {
 			desc = "proxy for " + repo + " cleared"
 		}
-		return opDoneMsg{Desc: desc, Err: err, Refresh: true}
+		return opDoneMsg{Desc: desc, Err: err, Refresh: true, Source: f}
 	}
 }
 
 func (f *proxyForm) View() string {
-	return "proxy for " + f.repo + "\n" + f.viewFields() + "\n" + hintStyle.Render("empty clears  enter save  esc cancel")
+	cur := f.current
+	if cur == "" {
+		cur = "none"
+	}
+	return "proxy for " + f.repo + "\n" +
+		dimStyle.Render("current: "+cur) + "\n" + f.viewFields() + "\n" +
+		hintStyle.Render("enter save (empty = no change)  ctrl+d clear proxy  esc cancel")
 }
 
 // updateOneCmd runs `helm repo update` for a single repo.
