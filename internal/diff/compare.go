@@ -55,9 +55,17 @@ func Compare(oldDir, newDir string) ([]FileDiff, error) {
 	err := walkTrees(oldDir, newDir, "", func(rel string, oldPath, newPath string) error {
 		switch {
 		case oldPath == "":
-			diffs = append(diffs, FileDiff{Path: rel, Status: Added})
+			d, err := oneSided(rel, newPath, Added, '+')
+			if err != nil {
+				return err
+			}
+			diffs = append(diffs, d)
 		case newPath == "":
-			diffs = append(diffs, FileDiff{Path: rel, Status: Removed})
+			d, err := oneSided(rel, oldPath, Removed, '-')
+			if err != nil {
+				return err
+			}
+			diffs = append(diffs, d)
 		default:
 			d, err := compareFiles(rel, oldPath, newPath)
 			if err != nil {
@@ -74,6 +82,27 @@ func Compare(oldDir, newDir string) ([]FileDiff, error) {
 	}
 	sort.Slice(diffs, func(i, j int) bool { return diffs[i].Path < diffs[j].Path })
 	return diffs, nil
+}
+
+// oneSided builds the FileDiff of a file present on one side only: every
+// line is an addition ('+') or removal ('-'); binary files carry no lines.
+func oneSided(rel, path string, st Status, kind byte) (FileDiff, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return FileDiff{}, err
+	}
+	d := FileDiff{Path: rel, Status: st}
+	if isBinary(data) || isTgz(rel) {
+		d.Binary = true
+		return d, nil
+	}
+	for _, l := range splitLines(data) {
+		d.Lines = append(d.Lines, Line{Kind: kind, Text: l})
+	}
+	if len(d.Lines) > 0 {
+		d.HunkStarts = []int{0}
+	}
+	return d, nil
 }
 
 // compareFiles returns nil when the files are identical.

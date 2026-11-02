@@ -220,3 +220,33 @@ func TestCompare_DirOnlyOnOneSideReportsChildFilesNotDir(t *testing.T) {
 		t.Errorf("diffs = %v (directories must not be reported)", st)
 	}
 }
+
+func TestCompare_AddedAndRemovedFilesCarryContent(t *testing.T) {
+	oldDir, newDir := t.TempDir(), t.TempDir()
+	mkTree(t, oldDir, map[string]string{"gone.yaml": "a\nb\n", "bin.dat": "x\x00y"})
+	mkTree(t, newDir, map[string]string{"new.yaml": "c\nd\ne\n", "newbin.dat": "x\x00y", "empty.yaml": ""})
+	diffs, err := Compare(oldDir, newDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]FileDiff{}
+	for _, d := range diffs {
+		by[d.Path] = d
+	}
+	n := by["new.yaml"]
+	if n.Status != Added || len(n.Lines) != 3 || n.Lines[0] != (Line{Kind: '+', Text: "c"}) || len(n.HunkStarts) != 1 || n.HunkStarts[0] != 0 {
+		t.Errorf("added: %+v", n)
+	}
+	g := by["gone.yaml"]
+	if g.Status != Removed || len(g.Lines) != 2 || g.Lines[1] != (Line{Kind: '-', Text: "b"}) {
+		t.Errorf("removed: %+v", g)
+	}
+	for _, p := range []string{"bin.dat", "newbin.dat"} {
+		if d := by[p]; !d.Binary || len(d.Lines) != 0 {
+			t.Errorf("%s: %+v", p, d)
+		}
+	}
+	if d := by["empty.yaml"]; d.Status != Added || len(d.Lines) != 0 {
+		t.Errorf("empty: %+v", d)
+	}
+}
