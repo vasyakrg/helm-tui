@@ -18,13 +18,20 @@ type chartsLoadedMsg struct {
 	Err    error
 }
 
+// escConsumer lets a screen handle Esc itself (e.g. to leave filter mode
+// before the app pops the screen).
+type escConsumer interface {
+	consumeEsc(*app) bool
+}
+
 // chartsScreen lists charts of one repository.
 type chartsScreen struct {
-	row    RepoRow
-	charts []index.Chart // nil until loaded; empty slice = index exists but no charts
-	filter string
-	cursor int
-	err    error
+	row       RepoRow
+	charts    []index.Chart // nil until loaded; empty slice = index exists but no charts
+	filter    string
+	filtering bool
+	cursor    int
+	err       error
 }
 
 func newChartsScreen(row RepoRow) *chartsScreen {
@@ -60,7 +67,7 @@ func (s *chartsScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 		s.clampCursor()
 		return s, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "j", "down":
 			if s.cursor < len(s.visible())-1 {
@@ -70,7 +77,16 @@ func (s *chartsScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 			if s.cursor > 0 {
 				s.cursor--
 			}
+		case "/":
+			if !s.filtering {
+				s.filtering = true
+				return s, nil
+			}
 		case "enter":
+			if s.filtering {
+				s.filtering = false
+				return s, nil
+			}
 			visible := s.visible()
 			if s.cursor < len(visible) {
 				c := visible[s.cursor]
@@ -78,11 +94,34 @@ func (s *chartsScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 					return pushScreenMsg{Screen: newVersionsScreen(s.row.Repo.Name, c)}
 				}
 			}
+		case "backspace":
+			if s.filtering && len(s.filter) > 0 {
+				s.filter = s.filter[:len(s.filter)-1]
+				s.clampCursor()
+				return s, nil
+			}
 		case "q":
-			return s, func() tea.Msg { return quitMsg{} }
+			if !s.filtering {
+				return s, func() tea.Msg { return quitMsg{} }
+			}
+		default:
+			if s.filtering && len(msg.Text) == 1 && msg.Text[0] >= 32 {
+				s.filter += msg.Text
+				s.clampCursor()
+				return s, nil
+			}
 		}
 	}
 	return s, nil
+}
+
+// consumeEsc exits filter mode first; otherwise lets the app pop the screen.
+func (s *chartsScreen) consumeEsc(*app) bool {
+	if s.filtering {
+		s.filtering = false
+		return true
+	}
+	return false
 }
 
 func (s *chartsScreen) clampCursor() {
@@ -117,6 +156,13 @@ func (s *chartsScreen) View() string {
 		return "no charts"
 	}
 	var b strings.Builder
+	if s.filter != "" {
+		mark := "filter: " + s.filter
+		if s.filtering {
+			mark += "▌"
+		}
+		b.WriteString(dimStyle.Render(mark) + "\n")
+	}
 	for i, c := range visible {
 		prefix := "  "
 		st := normalStyle

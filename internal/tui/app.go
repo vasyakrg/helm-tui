@@ -149,6 +149,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return a, tea.Quit
 		case "esc":
+			if c, ok := a.top().(escConsumer); ok && c.consumeEsc(a) {
+				return a, nil
+			}
 			if a.pop() {
 				return a, nil
 			}

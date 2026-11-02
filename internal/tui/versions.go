@@ -35,8 +35,19 @@ func (s *versionsScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 			if s.cursor > 0 {
 				s.cursor--
 			}
-		case " ":
+		case " ", "space":
 			s.toggle(s.cursor)
+		case "D":
+			if len(s.marked) < 2 {
+				s.status = "mark two versions with space first"
+				return s, nil
+			}
+			v1 := s.chart.Versions[s.marked[0]].Version
+			v2 := s.chart.Versions[s.marked[1]].Version
+			repo, chart := s.repo, s.chart.Name
+			return s, func() tea.Msg {
+				return pushScreenMsg{Screen: newDiffScreen(repo, chart, v1, v2)}
+			}
 		case "q":
 			return s, func() tea.Msg { return quitMsg{} }
 		}
