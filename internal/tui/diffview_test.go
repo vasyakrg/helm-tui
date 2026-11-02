@@ -3,9 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/vasyakrg/helm-tui/internal/diff"
 )
@@ -127,16 +131,20 @@ func TestDiff_NKeyJumpsToNextHunk(t *testing.T) {
 	ds := a.top().(*diffScreen)
 	a = send(t, a, diffResultMsg{Files: s.files})
 	a = send(t, a, key("n"))
-	if ds.hunk != 1 {
-		t.Errorf("hunk after n = %d, want 1", ds.hunk)
+	if ds.hunk != 0 {
+		t.Errorf("hunk after n = %d, want 0", ds.hunk)
 	}
 	a = send(t, a, key("n"))
-	if ds.hunk != 5 {
-		t.Errorf("hunk after second n = %d, want 5", ds.hunk)
+	if ds.hunk != 1 {
+		t.Errorf("hunk after second n = %d, want 1", ds.hunk)
+	}
+	a = send(t, a, key("n"))
+	if ds.hunk != 1 {
+		t.Errorf("hunk must not run past the last one, got %d", ds.hunk)
 	}
 	a = send(t, a, key("N"))
-	if ds.hunk != 1 {
-		t.Errorf("hunk after N = %d, want 1", ds.hunk)
+	if ds.hunk != 0 {
+		t.Errorf("hunk after N = %d, want 0", ds.hunk)
 	}
 }
 
@@ -159,5 +167,78 @@ func TestDiff_NoDifferencesMessage(t *testing.T) {
 	a = send(t, a, diffResultMsg{Files: nil})
 	if !contains(ds.View(), "no differences") {
 		t.Errorf("message missing:\n%s", ds.View())
+	}
+}
+
+func bigDiffFile() diff.FileDiff {
+	var lines []diff.Line
+	var hunks []int
+	for i := 0; i < 120; i++ {
+		switch i {
+		case 10, 55, 100:
+			hunks = append(hunks, len(lines))
+			lines = append(lines, diff.Line{Kind: '-', Text: fmt.Sprintf("old %d", i)}, diff.Line{Kind: '+', Text: fmt.Sprintf("new %d", i)})
+		default:
+			lines = append(lines, diff.Line{Kind: ' ', Text: fmt.Sprintf("ctx %d", i)})
+		}
+	}
+	return diff.FileDiff{Path: "values.yaml", Status: diff.Modified, Lines: lines, HunkStarts: hunks}
+}
+
+func viewLines(a *app) int { return strings.Count(strings.TrimRight(a.View().Content, "\n"), "\n") + 1 }
+
+func TestDiff_ViewFitsWindowAndHunkJumpScrolls(t *testing.T) {
+	s := &fakeSession{files: []diff.FileDiff{bigDiffFile()}}
+	for i := 0; i < 30; i++ {
+		s.files = append(s.files, diff.FileDiff{Path: fmt.Sprintf("templates/f%02d.yaml", i), Status: diff.Modified})
+	}
+	a := newDiffApp(t, s)
+	a = send(t, a, tea.WindowSizeMsg{Width: 80, Height: 14}, diffResultMsg{Files: s.files})
+	if n := viewLines(a); n > 14 {
+		t.Fatalf("view has %d lines, window is 14:\n%s", n, a.View().Content)
+	}
+	a = send(t, a, key("n"))
+	v := a.View().Content
+	if !contains(v, "new 10") || contains(v, "ctx 0\n") {
+		t.Errorf("first hunk not scrolled into view:\n%s", v)
+	}
+	a = send(t, a, key("n"), key("n"))
+	v = a.View().Content
+	if !contains(v, "new 100") || contains(v, "new 10\n") {
+		t.Errorf("third hunk not in view:\n%s", v)
+	}
+	if n := viewLines(a); n > 14 {
+		t.Errorf("view has %d lines after scroll", n)
+	}
+	a = send(t, a, key("N"))
+	if v = a.View().Content; !contains(v, "new 55") {
+		t.Errorf("N did not go back to previous hunk:\n%s", v)
+	}
+}
+
+func TestDiff_FileListIsWindowedAroundCursor(t *testing.T) {
+	var files []diff.FileDiff
+	for i := 0; i < 40; i++ {
+		files = append(files, diff.FileDiff{Path: fmt.Sprintf("f%02d.yaml", i), Status: diff.Modified})
+	}
+	s := &fakeSession{files: files}
+	a := newDiffApp(t, s)
+	a = send(t, a, tea.WindowSizeMsg{Width: 80, Height: 14}, diffResultMsg{Files: files})
+	for i := 0; i < 30; i++ {
+		a = send(t, a, key("j"))
+	}
+	v := a.View().Content
+	if !contains(v, "f30.yaml") {
+		t.Errorf("selected file not visible:\n%s", v)
+	}
+	if n := viewLines(a); n > 14 {
+		t.Errorf("view has %d lines", n)
+	}
+}
+
+func TestDiff_TitleIsOldToNew(t *testing.T) {
+	ds := newDiffScreen("r", "hub-manager", "1.0.1", "1.0.0")
+	if v := ds.View(); !contains(v, "hub-manager 1.0.0 → 1.0.1") {
+		t.Errorf("title:\n%s", v)
 	}
 }
