@@ -40,7 +40,7 @@ func TestLoad_ParsesChartsAndDates(t *testing.T) {
 	if created.IsZero() || created.Year() != 2023 {
 		t.Errorf("created not parsed: %v", created)
 	}
-	if nginx.Versions[0].AppVersion != "1.25.3" {
+	if nginx.Versions[0].AppVersion != "1.25.1" { // appVersion of 1.10.0, the newest version
 		t.Errorf("appVersion = %q", nginx.Versions[0].AppVersion)
 	}
 	if nginx.Versions[0].Description == "" {
