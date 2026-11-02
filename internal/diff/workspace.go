@@ -106,10 +106,27 @@ type Pair struct {
 	NewDir     string
 }
 
-// PullPair pulls both versions into the workspace (each into its own
-// version-named subdir) and returns them ordered by semver: Old is the
+// validSegment reports whether s is safe to use as a single path element.
+// Chart names and versions come from an untrusted index.yaml.
+func validSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	return !strings.ContainsAny(s, "/\\\x00") && filepath.Base(s) == s
+}
+
+// PullPair pulls both versions into the workspace (into the fixed subdirs
+// old/ and new/) and returns them ordered by semver: Old is the
 // smaller version regardless of the v1/v2 argument order.
 func PullPair(ctx context.Context, p Puller, w *Workspace, repo, chart, v1, v2, proxyURL string) (Pair, error) {
+	if !validSegment(chart) {
+		return Pair{}, fmt.Errorf("invalid chart name %q", chart)
+	}
+	for _, v := range []string{v1, v2} {
+		if !validSegment(v) {
+			return Pair{}, fmt.Errorf("invalid chart version %q", v)
+		}
+	}
 	oldV, newV := v1, v2
 	if index.Compare(oldV, newV) > 0 {
 		oldV, newV = newV, oldV
@@ -118,8 +135,9 @@ func PullPair(ctx context.Context, p Puller, w *Workspace, repo, chart, v1, v2, 
 		return Pair{}, err
 	}
 	pair := Pair{OldVersion: oldV, NewVersion: newV}
-	for _, v := range []string{oldV, newV} {
-		dest := filepath.Join(w.Dir, v)
+	for _, side := range []struct{ dir, v string }{{"old", oldV}, {"new", newV}} {
+		v := side.v
+		dest := filepath.Join(w.Dir, side.dir)
 		if err := os.MkdirAll(dest, 0o700); err != nil {
 			return Pair{}, err
 		}
@@ -130,7 +148,7 @@ func PullPair(ctx context.Context, p Puller, w *Workspace, repo, chart, v1, v2, 
 		if _, err := os.Stat(sub); err != nil {
 			return Pair{}, fmt.Errorf("chart dir missing after pull: %w", err)
 		}
-		if v == oldV {
+		if side.dir == "old" {
 			pair.OldDir = sub
 		} else {
 			pair.NewDir = sub

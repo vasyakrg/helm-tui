@@ -154,3 +154,48 @@ func TestPullPair_FailureOfOneVersionReturnsError(t *testing.T) {
 
 // *helm.Client must satisfy Puller
 var _ Puller = (*helm.Client)(nil)
+
+func TestPullPair_RejectsPathTraversalInVersionOrChart(t *testing.T) {
+	cases := []struct{ chart, v1, v2 string }{
+		{"c", "../../x", "1.0.0"},
+		{"c", "1.0.0", "a/b"},
+		{"c", "..", "1.0.0"},
+		{"c", "", "1.0.0"},
+		{"../evil", "1.0.0", "2.0.0"},
+		{"a/b", "1.0.0", "2.0.0"},
+		{"..", "1.0.0", "2.0.0"},
+		{"c", `a\b`, "1.0.0"},
+	}
+	for _, c := range cases {
+		root := t.TempDir()
+		w, err := NewWorkspace(filepath.Join(root, "ws"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := &fakePuller{}
+		if _, err := PullPair(context.Background(), p, w, "r", c.chart, c.v1, c.v2, ""); err == nil {
+			t.Errorf("chart=%q v1=%q v2=%q: want error", c.chart, c.v1, c.v2)
+		}
+		if len(p.calls) != 0 {
+			t.Errorf("chart=%q v1=%q v2=%q: pull was called: %v", c.chart, c.v1, c.v2, p.calls)
+		}
+		// nothing may be created outside the workspace dir
+		entries, _ := os.ReadDir(filepath.Join(root, "ws"))
+		if len(entries) != 1 { // only helm-tui-<id>
+			t.Errorf("unexpected entries beside workspace: %v", entries)
+		}
+		w.Close()
+	}
+}
+
+func TestPullPair_UsesFixedSubdirs(t *testing.T) {
+	w, _ := NewWorkspace(t.TempDir())
+	defer w.Close()
+	pair, err := PullPair(context.Background(), &fakePuller{}, w, "r", "c", "1.0.0+build", "2.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(pair.OldDir) != filepath.Join(w.Dir, "old") || filepath.Dir(pair.NewDir) != filepath.Join(w.Dir, "new") {
+		t.Errorf("dirs = %q %q", pair.OldDir, pair.NewDir)
+	}
+}

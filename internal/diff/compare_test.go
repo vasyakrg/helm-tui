@@ -187,3 +187,36 @@ func TestCompare_FileVsDirectory(t *testing.T) {
 		t.Errorf("file->dir transition mishandled: %+v", diffs)
 	}
 }
+
+func TestCompare_DirOnlyOnOneSideReportsChildFilesNotDir(t *testing.T) {
+	oldDir, newDir := t.TempDir(), t.TempDir()
+	mkTree(t, oldDir, map[string]string{
+		"Chart.yaml":         "a",
+		"crds/old/a.yaml":    "1",
+		"crds/old/sub/b.yml": "2",
+	})
+	mkTree(t, newDir, map[string]string{
+		"Chart.yaml":              "a",
+		"templates/extra/c.yaml":  "3",
+		"templates/extra/d/e.yml": "4",
+	})
+	diffs, err := Compare(oldDir, newDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := statuses(diffs)
+	want := map[string]Status{
+		"crds/old/a.yaml":         Removed,
+		"crds/old/sub/b.yml":      Removed,
+		"templates/extra/c.yaml":  Added,
+		"templates/extra/d/e.yml": Added,
+	}
+	for p, s := range want {
+		if got, ok := st[p]; !ok || got != s {
+			t.Errorf("%s: status=%v present=%v, want %v", p, got, ok, s)
+		}
+	}
+	if len(diffs) != len(want) {
+		t.Errorf("diffs = %v (directories must not be reported)", st)
+	}
+}

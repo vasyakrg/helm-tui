@@ -121,15 +121,20 @@ func walkTrees(oldDir, newDir, rel string, fn walkFn) error {
 	case oldIsDir && newIsDir:
 		return walkDirs(oldDir, newDir, rel, fn)
 	case oldIsDir:
-		// dir removed / replaced by file
-		if err := fn(rel, "", newPath); err != nil {
-			return err
+		// dir removed (or replaced by a file): the directory itself is never
+		// reported, only a file that now exists at this path plus the children
+		if exists(newPath) {
+			if err := fn(rel, "", newPath); err != nil {
+				return err
+			}
 		}
 		return walkOne(oldDir, rel, true, fn)
 	case newIsDir:
-		// file replaced by dir / dir added
-		if err := fn(rel, oldPath, ""); err != nil {
-			return err
+		// dir added (or a file replaced by a dir)
+		if exists(oldPath) {
+			if err := fn(rel, oldPath, ""); err != nil {
+				return err
+			}
 		}
 		return walkOne(newDir, rel, false, fn)
 	default:
