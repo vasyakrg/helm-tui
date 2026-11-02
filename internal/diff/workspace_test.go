@@ -71,6 +71,13 @@ func TestCleanStale_RemovesDeadPidKeepsLive(t *testing.T) {
 	}
 }
 
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type fakePuller struct {
 	calls []string
 	errOn string
@@ -139,8 +146,9 @@ func TestPullPair_FailureOfOneVersionReturnsError(t *testing.T) {
 	if pair.OldDir != "" || pair.NewDir != "" {
 		t.Errorf("got partial result: %+v", pair)
 	}
-	if len(p.calls) != 1 {
-		t.Errorf("should stop after first failure, calls = %v", p.calls)
+	// old version pulled fine, new version failed: no third call
+	if len(p.calls) != 2 {
+		t.Errorf("calls = %v", p.calls)
 	}
 }
 
