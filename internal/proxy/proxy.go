@@ -5,6 +5,7 @@ package proxy
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -25,33 +26,29 @@ func Validate(raw string) error {
 	return nil
 }
 
-// Mask replaces the password in a proxy URL with ***.
+// userinfoRe matches scheme://user:password@ inside arbitrary text. The
+// password is matched greedily up to the last '@' of the authority, so
+// passwords containing '@' are covered. The scheme is matched case-insensitively.
+var userinfoRe = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://[^\s/?#:@]+):[^\s/?#]*@`)
+
+// Mask replaces the password in a URL with ***. URLs without a password are
+// returned unchanged.
 func Mask(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
-		return raw
+	if u, err := url.Parse(raw); err == nil {
+		if u.User == nil {
+			return raw
+		}
+		if _, has := u.User.Password(); !has {
+			return raw
+		}
 	}
-	if _, has := u.User.Password(); !has {
-		return raw
-	}
-	// url.UserPassword percent-encodes ***, so splice userinfo by hand.
-	scheme := u.Scheme + "://"
-	rest := strings.TrimPrefix(raw, scheme)
-	slash := strings.Index(rest, "/")
-	hostPart := rest
-	path := ""
-	if slash >= 0 {
-		hostPart, path = rest[:slash], rest[slash:]
-	}
-	at := strings.LastIndex(hostPart, "@")
-	if at < 0 {
-		return raw
-	}
-	user := hostPart[:at]
-	if i := strings.IndexByte(user, ':'); i >= 0 {
-		user = user[:i]
-	}
-	return scheme + user + ":***@" + hostPart[at+1:] + path
+	return MaskText(raw)
+}
+
+// MaskText replaces the password of every scheme://user:password@host URL
+// found in arbitrary text (error messages, logs) with ***.
+func MaskText(text string) string {
+	return userinfoRe.ReplaceAllString(text, "${1}:***@")
 }
 
 // Scrub replaces every non-empty secret in text with ***.

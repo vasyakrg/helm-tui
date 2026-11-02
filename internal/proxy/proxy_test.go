@@ -117,3 +117,33 @@ func TestEnv_EmptyProxyKeepsBase(t *testing.T) {
 		}
 	}
 }
+
+func TestMask_CaseInsensitiveSchemeAndAtInPassword(t *testing.T) {
+	cases := map[string]string{
+		"HTTP://u:secret@h:3128":  "HTTP://u:***@h:3128",
+		"http://u:p@ss@h:3128/x":  "http://u:***@h:3128/x",
+		"socks5://u:pa:ss@h:1080": "socks5://u:***@h:1080",
+		"https://user@h:3128":     "https://user@h:3128",
+		"http://h:3128/a@b":       "http://h:3128/a@b",
+	}
+	for in, want := range cases {
+		if got := Mask(in); got != want {
+			t.Errorf("Mask(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMaskText_AllURLsAndAtInPassword(t *testing.T) {
+	in := `Get "HTTPS://a:p@ss1@h1/index.yaml": dial via http://b:s3cret@h2:3128 failed; mail x@y.z, http://h3:80 ok`
+	got := MaskText(in)
+	for _, leak := range []string{"p@ss1", "s3cret"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("MaskText leaked %q: %q", leak, got)
+		}
+	}
+	for _, keep := range []string{"HTTPS://a:***@h1/index.yaml", "http://b:***@h2:3128", "x@y.z", "http://h3:80 ok"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("MaskText lost %q: %q", keep, got)
+		}
+	}
+}

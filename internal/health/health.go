@@ -4,6 +4,7 @@ package health
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/vasyakrg/helm-tui/internal/helm"
@@ -49,7 +51,10 @@ func Check(ctx context.Context, repo, repoURL, proxyURL string, timeout time.Dur
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
 		TLSClientConfig:       &tls.Config{},
+		// One-shot transport: never keep connections (and their goroutines) alive.
+		DisableKeepAlives: true,
 	}
+	defer transport.CloseIdleConnections()
 	if proxyURL != "" {
 		u, perr := url.Parse(proxyURL)
 		if perr != nil {
@@ -69,6 +74,10 @@ func Check(ctx context.Context, repo, repoURL, proxyURL string, timeout time.Dur
 		return Result{Repo: repo, State: Fail, Latency: time.Since(start), Reason: classify(err)}
 	}
 	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		// Server answered: it is reachable, credentials are simply required.
+		return Result{Repo: repo, State: OK, Latency: time.Since(start), Reason: "auth"}
+	}
 	if resp.StatusCode >= 400 {
 		return Result{Repo: repo, State: Fail, Latency: time.Since(start),
 			Reason: "HTTP " + strconv.Itoa(resp.StatusCode)}
@@ -95,6 +104,8 @@ func CheckAll(ctx context.Context, repos []helm.Repo, proxyFor func(repo string)
 	return ch
 }
 
+// classify maps a transport error to a short reason. The reason never
+// contains the URL, host or credentials.
 func classify(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
@@ -103,47 +114,34 @@ func classify(err error) string {
 	if errors.As(err, &ne) && ne.Timeout() {
 		return "timeout"
 	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "proxyconnect"), strings.Contains(msg, "proxy"):
-		if isProxyAuthFailure(msg) {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && (opErr.Op == "proxyconnect" || strings.HasPrefix(opErr.Op, "socks")) {
+		if strings.Contains(err.Error(), "407") {
 			return "proxy error: HTTP 407"
 		}
-		return "proxy error: " + maskCreds(msg)
-	case strings.Contains(msg, "certificate"), strings.Contains(msg, "x509"), strings.Contains(msg, "tls"):
-		return "TLS error: " + maskCreds(msg)
-	case strings.Contains(msg, "no such host"), strings.Contains(msg, "lookup"):
-		return "DNS error: " + shortHost(err)
-	default:
-		return maskCreds(msg)
+		return "proxy error"
 	}
-}
-
-func isProxyAuthFailure(msg string) bool { return strings.Contains(msg, "407") }
-
-// maskCreds replaces user:password in any URL inside the message.
-func maskCreds(msg string) string {
-	out := msg
-	if i := strings.Index(out, "://"); i >= 0 {
-		rest := out[i+3:]
-		if at := strings.LastIndex(rest, "@"); at >= 0 && at < len(rest) {
-			head := rest[:at]
-			if c := strings.IndexByte(head, ':'); c >= 0 && !strings.Contains(head[:c], "/") {
-				out = out[:i+3] + head[:c] + ":***@" + rest[at+1:]
-			}
-		}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "DNS error"
 	}
-	return out
-}
-
-func shortHost(err error) string {
-	msg := err.Error()
-	if i := strings.Index(msg, "lookup "); i >= 0 {
-		rest := msg[i+7:]
-		if j := strings.Index(rest, ":"); j >= 0 {
-			return rest[:j]
-		}
-		return rest
+	var (
+		unknownAuth x509.UnknownAuthorityError
+		invalid     x509.CertificateInvalidError
+		hostErr     x509.HostnameError
+		verifyErr   *tls.CertificateVerificationError
+		recordErr   tls.RecordHeaderError
+		alertErr    tls.AlertError
+	)
+	if errors.As(err, &unknownAuth) || errors.As(err, &invalid) || errors.As(err, &hostErr) ||
+		errors.As(err, &verifyErr) || errors.As(err, &recordErr) || errors.As(err, &alertErr) {
+		return "TLS error"
 	}
-	return msg
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "connection reset"
+	}
+	return "error"
 }

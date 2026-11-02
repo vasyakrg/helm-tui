@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
@@ -28,13 +27,6 @@ type ExecRunner struct {
 	Bin string
 }
 
-var urlCredentialsRe = regexp.MustCompile(`(?::\/\/[^/@\s:]+:)([^/@\s]+)@`)
-
-// maskURLCredentials replaces password in every user:pass@host URL with ***.
-func maskURLCredentials(text string) string {
-	return urlCredentialsRe.ReplaceAllString(text, ":***@")
-}
-
 // RunError describes a failed helm invocation with scrubbed stderr.
 type RunError struct {
 	Args   []string
@@ -45,9 +37,9 @@ type RunError struct {
 func (e *RunError) Error() string {
 	msg := "helm " + strings.Join(e.Args, " ") + ": " + e.Err.Error()
 	if s := strings.TrimSpace(e.Stderr); s != "" {
-		msg += ": " + maskURLCredentials(s)
+		msg += ": " + proxy.MaskText(s)
 	}
-	return maskURLCredentials(msg)
+	return proxy.MaskText(msg)
 }
 
 func (e *RunError) Unwrap() error { return e.Err }

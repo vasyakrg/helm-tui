@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,5 +129,72 @@ func TestCheckAll_ParallelAndClosesChannel(t *testing.T) {
 	}
 	if d := time.Since(start); d > 500*time.Millisecond {
 		t.Errorf("checks not parallel: %v", d)
+	}
+}
+
+func TestCheck_UnauthorizedIsReachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+	}))
+	defer srv.Close()
+	res := Check(context.Background(), "r", srv.URL, "", 5*time.Second)
+	if res.State != OK {
+		t.Fatalf("401 must count as reachable, got %+v", res)
+	}
+	if res.Reason != "auth" {
+		t.Errorf("reason = %q, want auth", res.Reason)
+	}
+}
+
+func TestCheck_ConnectionRefusedClassified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	res := Check(context.Background(), "r", url, "", 2*time.Second)
+	if res.State != Fail || res.Reason != "connection refused" {
+		t.Errorf("got %+v", res)
+	}
+}
+
+func TestCheck_UnclassifiedReasonHasNoURLOrCreds(t *testing.T) {
+	// invalid scheme -> transport error containing the URL
+	res := Check(context.Background(), "r", "foo://u:sup3r@host/x", "", 2*time.Second)
+	if res.State != Fail {
+		t.Fatalf("state = %v", res.State)
+	}
+	if strings.Contains(res.Reason, "sup3r") || strings.Contains(res.Reason, "://") || strings.Contains(res.Reason, "host") {
+		t.Errorf("reason leaks details: %q", res.Reason)
+	}
+}
+
+func TestCheck_DNSErrorHasNoURL(t *testing.T) {
+	res := Check(context.Background(), "r", "http://nonexistent.invalid", "", 3*time.Second)
+	if res.State != Fail {
+		t.Fatalf("state = %v", res.State)
+	}
+	if strings.Contains(res.Reason, "://") || strings.Contains(res.Reason, "Get ") {
+		t.Errorf("reason = %q", res.Reason)
+	}
+}
+
+func TestCheck_DoesNotKeepConnectionsOpen(t *testing.T) {
+	var closed atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateClosed {
+			closed.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	Check(context.Background(), "r", srv.URL, "", 2*time.Second)
+	deadline := time.Now().Add(time.Second)
+	for closed.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if closed.Load() == 0 {
+		t.Error("connection still open after Check (keep-alive leak)")
 	}
 }

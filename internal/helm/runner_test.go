@@ -2,6 +2,7 @@ package helm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,5 +63,13 @@ func TestExecRunner_KilledOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+func TestRunError_MasksPasswordWithAtSign(t *testing.T) {
+	e := &RunError{Args: []string{"repo", "update"}, Err: errors.New("exit status 1"),
+		Stderr: "Get \"HTTPS://u:p@ss@h/index.yaml\": denied"}
+	if msg := e.Error(); strings.Contains(msg, "p@ss") || !strings.Contains(msg, "u:***@h") {
+		t.Errorf("Error() = %q", msg)
 	}
 }
