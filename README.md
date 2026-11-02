@@ -1,70 +1,134 @@
 # helm-tui
 
-Terminal UI for browsing and managing helm repositories: view charts and
-versions from the local helm cache, check repository availability, search
-across repositories and diff two chart versions.
+A terminal UI for browsing and managing your Helm repositories: see which
+sources are alive, add/remove/update them, search charts across all of them
+and diff any two versions of a chart.
+
+![Repositories](docs/screenshots/repos.png)
+
+## Features
+
+- **Repository list** with chart counts and a live availability check on
+  start (`●` ok with latency, `✕` failed with a short reason, `…` checking).
+- **Add / delete / update** repositories (single or all) — everything goes
+  through the `helm` CLI, `repositories.yaml` is never edited directly.
+- **Per-repository proxy** (`http://`, `https://`, `socks5://`) for sources
+  that get blocked from time to time. Used for the availability check, `add`,
+  `update` and `pull`.
+- **Global search** across the cached indexes of all repositories (name and
+  description, case-insensitive). Works for unreachable repositories too, as
+  long as their index is already cached.
+- **Charts and versions** per repository with release dates and app versions.
+- **Diff two versions** of a chart: both are pulled into a temporary
+  workspace and compared file by file (`Chart.yaml`, `values.yaml`,
+  `templates/`, `crds/`, …).
+
+| Global search | Versions |
+|---|---|
+| ![Search](docs/screenshots/search.png) | ![Versions](docs/screenshots/versions.png) |
+
+![Diff](docs/screenshots/diff.png)
 
 ## Requirements
 
-- Helm v4 CLI (`helm`) installed and configured
+- [Helm](https://helm.sh/) v4 CLI (`helm`) in your `PATH`
 - macOS or Linux
 
 ## Install
 
+### From a release
+
+Download the archive for your platform from the
+[Releases](https://github.com/vasyakrg/helm-tui/releases) page
+(`darwin_arm64`, `linux_arm64`, `linux_amd64`), verify it against
+`checksums.txt` and unpack:
+
 ```sh
-make build      # produces bin/helm-tui
-./bin/helm-tui
+tar -xzf helm-tui_1.0.0_linux_amd64.tar.gz
+sudo mv helm-tui_1.0.0_linux_amd64/helm-tui /usr/local/bin/
+helm-tui --version
 ```
 
-## Screens and keys
+On macOS, a binary downloaded through a browser is quarantined because it is
+not signed. Remove the flag once:
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/helm-tui
+```
+
+### From source
+
+```sh
+go install github.com/vasyakrg/helm-tui/cmd/helm-tui@latest
+```
+
+or
+
+```sh
+git clone git@github.com:vasyakrg/helm-tui.git && cd helm-tui
+make build        # produces bin/helm-tui
+```
+
+## Usage
+
+```sh
+helm-tui            # start the UI
+helm-tui --version
+```
+
+The UI reads the same repository configuration and cache as `helm` itself
+(`helm env`), so it shows exactly what `helm repo list` shows.
+
+## Keys
 
 ### Repositories (start screen)
 
-Lists `helm repo list` entries with chart counts from the cached
-`<repo>-index.yaml` and a live availability check (`…` checking, `●` ok with
-latency, `✕` failed with reason).
-
 | Key | Action |
 |-----|--------|
-| `j`/`k`, arrows | navigate |
-| `a` | add repository (name, URL, username, password, proxy) |
-| `d` | delete repository (with confirmation; also clears its proxy) |
-| `u` | update selected repository (`helm repo update <name>`) |
+| `j`/`k`, arrows | move |
+| `Enter` | open the charts of the repository |
+| `a` | add a repository (name, URL, username, password, proxy) |
+| `d` | delete the repository (asks for confirmation, also drops its proxy) |
+| `u` | update the selected repository (`helm repo update <name>`) |
 | `U` | update all repositories (one failure does not stop the rest) |
-| `p` | set/clear proxy for the selected repository |
+| `p` | set the proxy of the selected repository (`ctrl+d` clears it) |
 | `r` | re-run availability checks |
-| `/` | global chart search across all cached indexes |
-| `Enter` | open charts of the repository |
+| `/` | global search |
 | `q`, `Esc` | quit / back |
 
-Repository passwords are passed to helm via `--password-stdin`, never on the
-command line.
+Repository passwords are passed to `helm` via `--password-stdin`, never on the
+command line. A repository that answers `401` is reported as reachable with an
+`auth` mark, because the check is anonymous.
 
-### Charts / Versions
+### Charts, versions and search
 
-- `/` filter charts by substring, `Enter` open versions, `Esc` back.
-- Versions: `space` marks up to two versions, `D` diffs them (older → newer),
-  `Esc` back.
-
-### Search
-
-Type a substring — matches chart names and descriptions case-insensitively
-across all repositories with a cached index (unavailable repos are searched
-from cache too). `Enter` opens the versions of the hit.
+- Charts: `/` filters by substring, `u` updates the repository, `Enter` opens
+  the versions.
+- Versions: `space` marks up to two versions, `D` diffs them (older → newer).
+- Search: just type; `Enter` opens the versions of the selected chart.
+- `Esc` always goes one screen back.
 
 ### Diff
 
-Pulls both versions with `helm pull --untar` into a temp workspace
-(`/tmp/helm-tui-*`), compares the trees and shows changed files (`~` modified,
-`+` added, `-` removed) with a line diff per file; binary files and `*.tgz`
-are marked as changed without contents. `j`/`k` select file, `n`/`N` jump
-between hunks. The workspace is removed when you leave the screen or quit.
-Stale workspaces from crashed runs are cleaned up at startup.
+Changed files are listed with `~` modified, `+` added, `-` removed. Binary
+files and `*.tgz` are marked as changed without contents.
+
+| Key | Action |
+|-----|--------|
+| `j`/`k` | previous / next file |
+| `n`/`N` | next / previous hunk |
+| `pgup`/`pgdn`, `ctrl+u`/`ctrl+d` | scroll |
+| `Esc` | back (the workspace is removed) |
+
+Versions are pulled with `helm pull --untar` into `/tmp/helm-tui-<id>`. The
+directory is removed when you leave the screen or quit, including on
+`SIGINT`/`SIGTERM`; leftovers of crashed runs are cleaned up at the next
+start.
 
 ## Configuration
 
-Per-repository proxies live in `~/.config/helm-tui/config.yaml` (override with
-`XDG_CONFIG_HOME`):
+Proxies are stored per repository in `~/.config/helm-tui/config.yaml`
+(`$XDG_CONFIG_HOME` is respected):
 
 ```yaml
 proxies:
@@ -72,18 +136,33 @@ proxies:
   private-repo: http://user:password@proxy.corp:3128
 ```
 
-The file is written atomically with mode `0600` (directory `0700`). Repos with
-a configured proxy get `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` set and
-`NO_PROXY` cleared in the helm subprocess environment; other repos inherit the
-environment as is.
+For a repository with a proxy, the `helm` subprocess gets `HTTP_PROXY`,
+`HTTPS_PROXY` and `ALL_PROXY` set and `NO_PROXY` cleared. Repositories without
+a proxy inherit your environment unchanged.
 
 ## Limitations and security notes
 
-- OCI registries, TLS/CA flags for repositories and fuzzy search are not
-  supported.
-- Nested `charts/*.tgz` inside a pulled chart are not unpacked.
-- **Proxy passwords are stored in plain text** in the config file (protected
-  only by file permissions). Passwords never appear in the UI, logs or error
+- OCI registries, custom CA / client certificates / `--insecure-skip-tls-verify`
+  for repositories and fuzzy search are not supported.
+- Nested `charts/*.tgz` inside a pulled chart are shown as changed, not unpacked.
+- **Proxy passwords are stored in plain text** in the config file, protected
+  only by its permissions (`0600`, directory `0700`) — the same trade-off as
+  Helm's own `repositories.yaml`. They never appear in the UI, logs or error
   messages.
-- A configured proxy is passed to the helm subprocess via environment
-  variables.
+- A configured proxy reaches the `helm` subprocess through environment
+  variables, so it is visible to the same OS user (e.g. via `ps eww`).
+- Version and chart names from a repository index are treated as untrusted:
+  they are validated as a single path segment before anything is written to
+  disk.
+
+## Development
+
+```sh
+make test       # go test ./...
+make vet        # go vet ./...
+make build      # bin/helm-tui
+make release    # dist/*.tar.gz for darwin/arm64, linux/arm64, linux/amd64 + checksums.txt
+```
+
+The version is stored in the `VERSION` file and shared by all release
+artifacts.
