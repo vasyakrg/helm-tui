@@ -173,7 +173,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case opDoneMsg:
 		if msg.Err != nil {
-			a.status = "error: " + msg.Err.Error()
+			a.status = "error: " + maskURLCredentials(msg.Err.Error())
 		} else if msg.Desc != "" {
 			a.status = msg.Desc
 		}
@@ -189,7 +189,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a *app) View() tea.View {
-	v := tea.NewView(a.top().View())
+	content := a.top().View()
+	if a.status != "" {
+		content = errStyle.Render(a.status) + "\n" + content
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
 }

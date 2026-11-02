@@ -29,11 +29,12 @@ func fakeDeps(repos []helm.Repo, proxies map[string]string) (Deps, *fakeHelm) {
 }
 
 type fakeHelm struct {
-	repos   []helm.Repo
-	added   []helm.AddArgs
-	removed []string
-	updated []string
-	err     error
+	repos      []helm.Repo
+	added      []helm.AddArgs
+	removed    []string
+	updated    []string
+	err        error
+	updateErrs map[string]error
 }
 
 func (f *fakeHelm) List(context.Context) ([]helm.Repo, error) { return f.repos, f.err }
@@ -47,6 +48,9 @@ func (f *fakeHelm) Remove(_ context.Context, name string) error {
 }
 func (f *fakeHelm) Update(_ context.Context, name, _ string) error {
 	f.updated = append(f.updated, name)
+	if err, ok := f.updateErrs[name]; ok {
+		return err
+	}
 	return f.err
 }
 func (f *fakeHelm) Pull(context.Context, string, string, string, string, string) error {
@@ -69,28 +73,59 @@ func (f *fakeConfig) SetProxy(repo, proxyURL string) error {
 	return nil
 }
 
-func send(t *testing.T, m tea.Model, msgs ...tea.Msg) *app {
+func send(t *testing.T, m tea.Model, msgs ...any) *app {
 	t.Helper()
 	a := m.(*app)
-	for _, msg := range msgs {
-		for {
-			var cmd tea.Cmd
-			m, cmd = a.Update(msg)
-			a = m.(*app)
-			if cmd == nil {
-				break
+	for _, item := range msgs {
+		var batch []tea.Msg
+		switch v := item.(type) {
+		case string:
+			for _, r := range v {
+				batch = append(batch, tea.KeyPressMsg{Code: r, Text: string(r)})
 			}
-			next := cmd()
-			if next == nil {
-				break
+		default:
+			batch = []tea.Msg{v.(tea.Msg)}
+		}
+		for _, msg := range batch {
+			for i := 0; i < 100; i++ {
+				var cmd tea.Cmd
+				m, cmd = a.Update(msg)
+				a = m.(*app)
+				if cmd == nil {
+					break
+				}
+				// Run the command with a guard timer: some cmds (cursor blink)
+				// block on timers and must not stall the test.
+				done := make(chan tea.Msg, 1)
+				go func(c tea.Cmd) { done <- c() }(cmd)
+				var next tea.Msg
+				select {
+				case next = <-done:
+				case <-time.After(100 * time.Millisecond):
+					break
+				}
+				if next == nil {
+					break
+				}
+				msg = next
 			}
-			msg = next
 		}
 	}
 	return a
 }
 
-func key(s string) tea.Msg { return tea.KeyPressMsg{Code: rune(s[0]), Text: s} }
+func key(s string) tea.Msg {
+	switch s {
+	case "enter":
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "\t":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "ctrl+u":
+		return tea.KeyPressMsg{Code: 0x15} // ctrl+u
+	default:
+		return tea.KeyPressMsg{Code: rune(s[0]), Text: s}
+	}
+}
 
 func TestRepos_ShowsRowsAfterLoad(t *testing.T) {
 	deps, _ := fakeDeps([]helm.Repo{{Name: "bitnami", URL: "https://charts.bitnami.com"}}, nil)

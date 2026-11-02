@@ -120,6 +120,29 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 				s.rows[i].Reason = ""
 			}
 			return s, startHealthCmd(a)
+		case "a":
+			return s, func() tea.Msg { return pushScreenMsg{Screen: newAddForm()} }
+		case "d":
+			if len(s.rows) > 0 && s.cursor < len(s.rows) {
+				row := s.rows[s.cursor]
+				return s, func() tea.Msg { return pushScreenMsg{Screen: newDeleteDialog(row)} }
+			}
+		case "u":
+			if len(s.rows) > 0 && s.cursor < len(s.rows) {
+				name := s.rows[s.cursor].Repo.Name
+				return s, updateOneCmd(a, name)
+			}
+		case "U":
+			return s, updateAllCmd(a)
+		case "p":
+			if len(s.rows) > 0 && s.cursor < len(s.rows) {
+				row := s.rows[s.cursor]
+				return s, func() tea.Msg {
+					return pushScreenMsg{Screen: newProxyForm(row.Repo.Name, a.proxyFor(row.Repo.Name))}
+				}
+			}
+		case "/":
+			return s, func() tea.Msg { return pushScreenMsg{Screen: newSearchScreen()} }
 		case "enter":
 			if len(s.rows) > 0 && s.cursor < len(s.rows) {
 				row := s.rows[s.cursor]
