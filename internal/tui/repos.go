@@ -28,6 +28,7 @@ type reposScreen struct {
 	rows    []RepoRow
 	cursor  int
 	loading bool
+	healthCh <-chan health.Result
 }
 
 func newReposScreen() *reposScreen {
@@ -63,12 +64,13 @@ func startHealthCmd(a *app) tea.Cmd {
 	if a.deps.Health == nil {
 		return nil
 	}
-	repos := make([]helm.Repo, len(a.top().(*reposScreen).rows))
-	for i, r := range a.top().(*reposScreen).rows {
+	rs := a.top().(*reposScreen)
+	repos := make([]helm.Repo, len(rs.rows))
+	for i, r := range rs.rows {
 		repos[i] = r.Repo
 	}
-	ch := a.deps.Health(context.Background(), repos, a.proxyFor)
-	return waitForHealth(ch)
+	rs.healthCh = a.deps.Health(context.Background(), repos, a.proxyFor)
+	return waitForHealth(rs.healthCh)
 }
 
 // waitForHealth returns a command yielding the next health result.
@@ -98,7 +100,7 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 				s.rows[i].Reason = msg.Result.Reason
 			}
 		}
-		return s, nil
+		return s, waitForHealth(s.healthCh)
 
 	case tea.KeyMsg:
 		switch msg.String() {
