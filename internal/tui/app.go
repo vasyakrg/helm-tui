@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -77,6 +78,9 @@ type opDoneMsg struct {
 	Err  error
 	// Refresh indicates the repo list should be reloaded.
 	Refresh bool
+	// RefreshIndexes re-reads the cached indexes (chart counts) without
+	// reloading the repo list or restarting the availability check.
+	RefreshIndexes bool
 	// Source is the form/dialog that started the operation (optional). It is
 	// closed on success and shows the (masked) error on failure.
 	Source screen
@@ -133,7 +137,7 @@ func (a *app) top() screen { return a.stack[len(a.stack)-1] }
 func (a *app) push(s screen) {
 	a.stack = append(a.stack, s)
 	if sa, ok := s.(sizeAware); ok && a.width > 0 {
-		sa.setSize(a.width, a.height)
+		sa.setSize(a.width, a.bodyHeight())
 	}
 }
 
@@ -222,7 +226,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width, a.height = msg.Width, msg.Height
 		for _, sc := range a.stack {
 			if sa, ok := sc.(sizeAware); ok {
-				sa.setSize(a.width, a.height)
+				sa.setSize(a.width, a.bodyHeight())
 			}
 		}
 		return a, nil
@@ -265,6 +269,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case healthMsg:
 		return a, a.routeToRoot(msg)
 
+	case indexCountsMsg:
+		return a, a.routeToRoot(msg)
+
 	case reposLoadFailedMsg:
 		a.status = "error: " + proxy.MaskText(msg.Err.Error())
 		return a, a.routeToRoot(msg)
@@ -288,12 +295,23 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Refresh {
 			return a, loadReposCmd(a)
 		}
+		if msg.RefreshIndexes {
+			return a, loadIndexCountsCmd(a)
+		}
 		return a, nil
 	}
 
 	s, cmd := a.top().Update(msg, a)
 	a.replaceTop(s)
 	return a, cmd
+}
+
+// bodyHeight is the terminal height available to a screen body.
+func (a *app) bodyHeight() int {
+	if a.height <= 0 {
+		return 0
+	}
+	return maxInt(a.height-chromeRows, 1)
 }
 
 func (a *app) onStack(target screen) bool {
@@ -306,26 +324,25 @@ func (a *app) onStack(target screen) bool {
 }
 
 func (a *app) View() tea.View {
-	content := a.top().View()
+	w := a.width
+	if w <= 0 {
+		w = 80
+	}
+	content := strings.TrimRight(a.top().View(), "\n")
+	used := strings.Count(content, "\n") + 1
 	if a.status != "" {
-		content = errStyle.Render(a.status) + "\n" + content
+		content = errStyle.Render(truncate(a.status, w)) + "\n" + content
+		used++
+	}
+	if h, ok := a.top().(hinter); ok {
+		if a.height > 0 && used < a.height-1 {
+			content += strings.Repeat("\n", a.height-1-used)
+		}
+		content += "\n" + hintStyle.Render(truncate(h.hints(), w))
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
-}
-
-// renderChrome wraps a screen body with title, status and hint lines.
-func (a *app) renderChrome(title, body, hints string) string {
-	out := titleStyle.Render(title) + "\n"
-	if a.status != "" {
-		out += errStyle.Render(a.status) + "\n"
-	}
-	out += body
-	if hints != "" {
-		out += "\n" + hintStyle.Render(truncate(hints, maxInt(a.width, 20)))
-	}
-	return out
 }
 
 func maxInt(a, b int) int {

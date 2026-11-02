@@ -29,7 +29,8 @@ type reposScreen struct {
 	rows    []RepoRow
 	cursor  int
 	loading bool
-	width   int
+	top     int
+	winSize
 
 	// availability check state: healthGen identifies the current run so
 	// results of a superseded run are dropped and never extend a chain.
@@ -64,6 +65,33 @@ func loadReposCmd(a *app) tea.Cmd {
 			rows = append(rows, row)
 		}
 		return reposLoadedMsg{Rows: rows}
+	}
+}
+
+// indexCountsMsg carries refreshed chart counts per repo name.
+type indexCountsMsg struct {
+	Counts map[string]indexCount
+}
+
+type indexCount struct {
+	Has    bool
+	Charts int
+}
+
+// loadIndexCountsCmd re-reads the cached indexes of the listed repos.
+func loadIndexCountsCmd(a *app) tea.Cmd {
+	names := a.repoNames()
+	cacheDir := a.deps.Env.RepositoryCache
+	return func() tea.Msg {
+		counts := make(map[string]indexCount, len(names))
+		for _, n := range names {
+			if idx, err := index.Load(cacheDir, n); err == nil {
+				counts[n] = indexCount{Has: true, Charts: len(idx.Charts)}
+			} else {
+				counts[n] = indexCount{}
+			}
+		}
+		return indexCountsMsg{Counts: counts}
 	}
 }
 
@@ -112,8 +140,6 @@ func (s *reposScreen) onClose() {
 	}
 }
 
-func (s *reposScreen) setSize(width, _ int) { s.width = width }
-
 func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case reposLoadedMsg:
@@ -124,6 +150,14 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 
 	case reposLoadFailedMsg:
 		s.loading = false
+		return s, nil
+
+	case indexCountsMsg:
+		for i := range s.rows {
+			if c, ok := msg.Counts[s.rows[i].Repo.Name]; ok {
+				s.rows[i].HasIndex, s.rows[i].Charts = c.Has, c.Charts
+			}
+		}
 		return s, nil
 
 	case healthMsg:
@@ -203,12 +237,15 @@ func (s *reposScreen) clampCursor() {
 }
 
 func (s *reposScreen) View() string {
-	w := s.width
-	if w <= 0 {
-		w = 80
-	}
-	return s.view(w)
+	return s.view(s.widthOr(80))
 }
+
+func (s *reposScreen) hints() string { return hintRepos }
+
+const (
+	chartsColW = 6
+	statusColW = 14
+)
 
 func (s *reposScreen) view(width int) string {
 	if s.loading {
@@ -218,42 +255,53 @@ func (s *reposScreen) view(width int) string {
 		return "no repositories configured.\nPress a to add one."
 	}
 
-	nameW := 10
+	nameW, urlMax := 4, 3
 	for _, r := range s.rows {
-		if n := len(r.Repo.Name); n > nameW {
-			nameW = n
-		}
+		nameW = maxInt(nameW, minInt(lipglossWidth(r.Repo.Name), 30))
+		urlMax = maxInt(urlMax, lipglossWidth(proxy.MaskText(r.Repo.URL)))
 	}
-	// mark + name + url + charts + latency/reason + margins
-	avail := width - nameW - 24
-	if avail < 8 {
-		avail = 8
+	// prefix(2) name sep(2) url sep(2) charts sep(2) status
+	urlW := width - 2 - nameW - 2 - 2 - chartsColW - 2 - statusColW
+	if urlW < 8 {
+		urlW = 8
+	}
+	if urlW > urlMax {
+		urlW = urlMax
 	}
 
 	var b strings.Builder
-	for i, r := range s.rows {
+	b.WriteString(dimStyle.Render("  "+pad("NAME", nameW)+"  "+pad("URL", urlW)+"  "+padLeft("CHARTS", chartsColW)+"  STATUS") + "\n")
+
+	rows := s.listRows(1)
+	s.top = windowTop(s.top, s.cursor, len(s.rows), rows)
+	end := windowEnd(s.top, len(s.rows), rows)
+	for i := s.top; i < end; i++ {
+		r := s.rows[i]
 		prefix := "  "
 		st := normalStyle
 		if i == s.cursor {
 			prefix = "> "
 			st = selectedStyle
 		}
-		url := truncate(proxy.MaskText(r.Repo.URL), avail)
+		url := truncate(proxy.MaskText(r.Repo.URL), urlW)
 
 		charts := dimStyle.Render("—")
 		if r.HasIndex {
 			charts = strconv.Itoa(r.Charts)
 		}
-		mark := statusMark(r.State)
-		status := ""
+		status := statusMark(r.State)
 		switch r.State {
 		case health.OK:
-			status = okStyle.Render(strconv.Itoa(int(r.Latency.Milliseconds())) + "ms")
+			text := strconv.Itoa(int(r.Latency.Milliseconds())) + "ms"
+			if r.Reason == "auth" {
+				text += " auth"
+			}
+			status += " " + okStyle.Render(truncate(text, statusColW-2))
 		case health.Fail:
-			status = failStyle.Render(truncate(r.Reason, 14))
+			status += " " + failStyle.Render(truncate(r.Reason, statusColW-2))
 		}
 		b.WriteString(prefix + st.Render(pad(truncate(r.Repo.Name, nameW), nameW)) + "  " +
-			url + "  " + pad(charts, 6) + " " + mark + " " + status + "\n")
+			pad(url, urlW) + "  " + padLeft(charts, chartsColW) + "  " + status + "\n")
 	}
 	return b.String()
 }

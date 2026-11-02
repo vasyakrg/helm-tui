@@ -185,8 +185,10 @@ func (f *addForm) submit(a *app) tea.Cmd {
 }
 
 func (f *addForm) View() string {
-	return "add repository\n" + f.viewFields() + "\n" + hintStyle.Render("tab next  enter submit  esc cancel")
+	return "add repository\n" + f.viewFields()
 }
+
+func (f *addForm) hints() string { return "tab next  enter submit  ctrl+u clear field  esc cancel" }
 
 // confirmDialog asks a yes/no question.
 type confirmDialog struct {
@@ -228,8 +230,10 @@ func (d *confirmDialog) View() string {
 	if d.err != "" {
 		out += errStyle.Render(d.err) + "\n"
 	}
-	return out + hintStyle.Render("y confirm  esc cancel")
+	return out
 }
+
+func (d *confirmDialog) hints() string { return "y confirm  esc cancel" }
 
 // newDeleteDialog confirms and performs repo deletion.
 func newDeleteDialog(row RepoRow) *confirmDialog {
@@ -314,8 +318,11 @@ func (f *proxyForm) View() string {
 		cur = "none"
 	}
 	return "proxy for " + f.repo + "\n" +
-		dimStyle.Render("current: "+cur) + "\n" + f.viewFields() + "\n" +
-		hintStyle.Render("enter save (empty = no change)  ctrl+d clear proxy  esc cancel")
+		dimStyle.Render("current: "+cur) + "\n" + f.viewFields()
+}
+
+func (f *proxyForm) hints() string {
+	return "enter save (empty = no change)  ctrl+d clear proxy  esc cancel"
 }
 
 // updateOneCmd runs `helm repo update` for a single repo.
@@ -323,7 +330,7 @@ func updateOneCmd(a *app, name string) tea.Cmd {
 	proxyURL := a.proxyFor(name)
 	return func() tea.Msg {
 		err := a.deps.Helm.Update(context.Background(), name, proxyURL)
-		return opDoneMsg{Desc: "updated " + name, Err: err, Refresh: false}
+		return opDoneMsg{Desc: "updated " + name, Err: err, RefreshIndexes: true}
 	}
 }
 
@@ -343,9 +350,9 @@ func updateAllCmd(a *app) tea.Cmd {
 			}
 		}
 		if len(failed) > 0 {
-			return opDoneMsg{Err: &multiError{msgs: failed}, Refresh: false}
+			return opDoneMsg{Err: &multiError{msgs: failed}, RefreshIndexes: true}
 		}
-		return opDoneMsg{Desc: "updated " + strconv.Itoa(len(names)) + " repositories", Refresh: false}
+		return opDoneMsg{Desc: "updated " + strconv.Itoa(len(names)) + " repositories", RefreshIndexes: true}
 	}
 }
 

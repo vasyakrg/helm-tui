@@ -16,7 +16,9 @@ type searchScreen struct {
 	idxs   []*index.Index
 	hits   []search.Hit
 	cursor int
+	top    int
 	err    string
+	winSize
 }
 
 func newSearchScreen() *searchScreen {
@@ -98,6 +100,8 @@ func (s *searchScreen) applyFilter() {
 	}
 }
 
+func (s *searchScreen) hints() string { return hintSearch }
+
 func (s *searchScreen) View() string {
 	var b strings.Builder
 	b.WriteString("search\n")
@@ -106,7 +110,11 @@ func (s *searchScreen) View() string {
 		b.WriteString(dimStyle.Render("no matches"))
 		return b.String()
 	}
-	for i, h := range s.hits {
+	rows := s.listRows(2)
+	s.top = windowTop(s.top, s.cursor, len(s.hits), rows)
+	end := windowEnd(s.top, len(s.hits), rows)
+	for i := s.top; i < end; i++ {
+		h := s.hits[i]
 		prefix := "  "
 		st := normalStyle
 		if i == s.cursor {

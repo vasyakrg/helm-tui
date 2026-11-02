@@ -143,7 +143,7 @@ func TestProxyForm_ShowsMaskedCurrentAndStartsEmpty(t *testing.T) {
 	if contains(v, "hunter2") {
 		t.Errorf("password visible:\n%s", v)
 	}
-	if !contains(v, "http://u:***@p:3128") || !contains(v, "ctrl+d") {
+	if !contains(v, "http://u:***@p:3128") || !contains(f.hints(), "ctrl+d") {
 		t.Errorf("masked current / ctrl+d hint missing:\n%s", v)
 	}
 }

@@ -71,7 +71,7 @@ type diffScreen struct {
 	err     error
 	loading bool
 
-	width, height int
+	winSize
 }
 
 // newDiffScreen shows the comparison of two versions. The versions are
@@ -84,16 +84,16 @@ func newDiffScreen(repo, chart, v1, v2 string) *diffScreen {
 	return &diffScreen{repo: repo, chart: chart, v1: v1, v2: v2, loading: true, hunk: -1}
 }
 
-func (s *diffScreen) setSize(width, height int) { s.width, s.height = width, height }
+func (s *diffScreen) hints() string { return hintDiff }
 
 // layout returns the number of rows for the file list and the diff pane.
-// One line is reserved for the app status line, two for title and file header.
+// The height is the body height; two rows go to title and file header.
 func (s *diffScreen) layout() (fileRows, diffRows int) {
 	h := s.height
 	if h <= 0 {
 		h = 24
 	}
-	body := h - 1 - 2
+	body := h - 2
 	if body < 2 {
 		body = 2
 	}
@@ -237,10 +237,7 @@ func (s *diffScreen) View() string {
 	case len(s.files) == 0:
 		return title + "\n" + "no differences"
 	}
-	width := s.width
-	if width <= 0 {
-		width = 80
-	}
+	width := s.widthOr(80)
 	if s.cursor >= len(s.files) {
 		s.cursor = len(s.files) - 1
 	}

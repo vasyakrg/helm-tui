@@ -46,6 +46,8 @@ type chartsScreen struct {
 	err       error
 	updating  bool
 	updateErr string
+	top       int
+	winSize
 }
 
 func newChartsScreen(row RepoRow) *chartsScreen {
@@ -202,13 +204,18 @@ func (s *chartsScreen) visible() []index.Chart {
 	return out
 }
 
+func (s *chartsScreen) hints() string { return hintCharts }
+
 func (s *chartsScreen) View() string {
 	var b strings.Builder
+	reserved := 0
 	if s.updating {
 		b.WriteString(dimStyle.Render("updating repository…") + "\n")
+		reserved++
 	}
 	if s.updateErr != "" {
-		b.WriteString(errStyle.Render(s.updateErr) + "\n")
+		b.WriteString(errStyle.Render(truncate(s.updateErr, s.widthOr(80))) + "\n")
+		reserved++
 	}
 	switch {
 	case s.err != nil:
@@ -224,15 +231,21 @@ func (s *chartsScreen) View() string {
 	switch {
 	case s.filtering:
 		b.WriteString(s.input.View() + "\n")
+		reserved++
 	case s.filter != "":
 		b.WriteString(dimStyle.Render("filter: "+s.filter) + "\n")
+		reserved++
 	}
 	visible := s.visible()
 	if len(visible) == 0 {
 		b.WriteString("no charts match the filter")
 		return b.String()
 	}
-	for i, c := range visible {
+	rows := s.listRows(reserved)
+	s.top = windowTop(s.top, s.cursor, len(visible), rows)
+	end := windowEnd(s.top, len(visible), rows)
+	for i := s.top; i < end; i++ {
+		c := visible[i]
 		prefix := "  "
 		st := normalStyle
 		if i == s.cursor {

@@ -15,6 +15,8 @@ type versionsScreen struct {
 	cursor int
 	marked []int // indexes into chart.Versions, oldest selection first
 	status string
+	top    int
+	winSize
 }
 
 func newVersionsScreen(repo string, chart index.Chart) *versionsScreen {
@@ -70,9 +72,19 @@ func (s *versionsScreen) toggle(i int) {
 	s.marked = append(s.marked, i)
 }
 
+func (s *versionsScreen) hints() string { return hintVersions }
+
 func (s *versionsScreen) View() string {
 	var b strings.Builder
-	for i, v := range s.chart.Versions {
+	reserved := 0
+	if s.status != "" {
+		reserved = 1
+	}
+	rows := s.listRows(reserved)
+	s.top = windowTop(s.top, s.cursor, len(s.chart.Versions), rows)
+	end := windowEnd(s.top, len(s.chart.Versions), rows)
+	for i := s.top; i < end; i++ {
+		v := s.chart.Versions[i]
 		prefix := "  "
 		st := normalStyle
 		if i == s.cursor {
