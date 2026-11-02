@@ -88,22 +88,28 @@ func Load(cacheDir, repo string) (*Index, error) {
 // sort comparison), non-semver strings compare equal to each other and are
 // less than any semver.
 func Compare(a, b string) int {
-	sa, ea := semver.NewVersion(strings.TrimSpace(a))
-	sb, eb := semver.NewVersion(strings.TrimSpace(b))
-	if ea != nil && eb != nil {
-		if a < b {
-			return -1
-		}
-		if a > b {
-			return 1
-		}
-		return 0
-	}
-	if ea != nil {
+	aOK := checkSemver(a)
+	bOK := checkSemver(b)
+	switch {
+	case aOK && bOK:
+		av, _ := semver.NewVersion(strings.TrimSpace(a))
+		bv, _ := semver.NewVersion(strings.TrimSpace(b))
+		return av.Compare(bv)
+	case aOK:
 		return 1
-	}
-	if eb != nil {
+	case bOK:
 		return -1
 	}
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
 	return 0
+}
+
+func checkSemver(s string) bool {
+	_, err := semver.NewVersion(strings.TrimSpace(s))
+	return err == nil
 }
