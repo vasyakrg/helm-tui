@@ -50,6 +50,7 @@ type Deps struct {
 	Config ConfigAPI
 	Env    helm.Env
 	Health func(ctx context.Context, repos []helm.Repo, proxyFor func(repo string) string) <-chan health.Result
+	Diff   func() (DiffSession, error)
 }
 
 // reposLoadedMsg carries fully-built repo rows (list + index counts).
@@ -116,10 +117,25 @@ func (a *app) replaceTop(s screen) {
 // pop removes the top screen; returns true when it popped.
 func (a *app) pop() bool {
 	if len(a.stack) > 1 {
+		if c, ok := a.top().(closer); ok {
+			c.onClose()
+		}
 		a.stack = a.stack[:len(a.stack)-1]
 		return true
 	}
+	if c, ok := a.top().(closer); ok {
+		c.onClose()
+	}
 	return false
+}
+
+// closeAll notifies every screen that the app is shutting down.
+func (a *app) closeAll() {
+	for _, s := range a.stack {
+		if c, ok := s.(closer); ok {
+			c.onClose()
+		}
+	}
 }
 
 // proxyFor returns the configured proxy URL for a repo.
@@ -147,6 +163,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			a.closeAll()
 			return a, tea.Quit
 		case "esc":
 			if c, ok := a.top().(escConsumer); ok && c.consumeEsc(a) {
@@ -167,6 +184,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case quitMsg:
+		a.closeAll()
 		return a, tea.Quit
 
 	case statusMsg:

@@ -51,7 +51,9 @@ func run() error {
 		_ = err
 	}
 
+	runner := tui.DiffRunner{Puller: client}
 	deps := tui.Deps{
+		Diff:   runner.NewSession,
 		Helm:   client,
 		Config: configAdapter{store},
 		Env:    env,
