@@ -31,13 +31,13 @@ func TestCompare_ModifiedAddedRemoved(t *testing.T) {
 	oldDir := t.TempDir()
 	newDir := t.TempDir()
 	mkTree(t, oldDir, map[string]string{
-		"Chart.yaml":        "a",
-		"values.yaml":       "x: 1",
+		"Chart.yaml":         "a",
+		"values.yaml":        "x: 1",
 		"templates/old.yaml": "gone",
 	})
 	mkTree(t, newDir, map[string]string{
-		"Chart.yaml":   "a",
-		"values.yaml":  "x: 2",
+		"Chart.yaml":         "a",
+		"values.yaml":        "x: 2",
 		"templates/new.yaml": "added",
 	})
 	diffs, err := Compare(oldDir, newDir)
