@@ -49,12 +49,9 @@ sudo mv helm-tui_1.0.0_linux_amd64/helm-tui /usr/local/bin/
 helm-tui --version
 ```
 
-On macOS, a binary downloaded through a browser is quarantined because it is
-not signed. Remove the flag once:
-
-```sh
-xattr -d com.apple.quarantine /usr/local/bin/helm-tui
-```
+The macOS binary is signed with a Developer ID certificate and notarized by
+Apple, so Gatekeeper accepts it without extra steps (the first launch after
+download needs an internet connection for the notarization check).
 
 ### From source
 
@@ -162,6 +159,7 @@ make test       # go test ./...
 make vet        # go vet ./...
 make build      # bin/helm-tui
 make release    # dist/*.tar.gz for darwin/arm64, linux/arm64, linux/amd64 + checksums.txt
+                # SIGN_IDENTITY / NOTARY_PROFILE enable signing + notarization of the darwin binary
 ```
 
 The version is stored in the `VERSION` file and shared by all release
