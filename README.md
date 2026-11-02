@@ -164,3 +164,7 @@ make release    # dist/*.tar.gz for darwin/arm64, linux/arm64, linux/amd64 + che
 
 The version is stored in the `VERSION` file and shared by all release
 artifacts.
+
+## License
+
+[MIT](LICENSE)
