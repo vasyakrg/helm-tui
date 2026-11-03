@@ -57,8 +57,8 @@ Download the archive for your platform from the
 `checksums.txt` and unpack:
 
 ```sh
-tar -xzf helm-tui_1.0.0_linux_amd64.tar.gz
-sudo mv helm-tui_1.0.0_linux_amd64/helm-tui /usr/local/bin/
+tar -xzf helm-tui_1.1.0_linux_amd64.tar.gz
+sudo mv helm-tui_1.1.0_linux_amd64/helm-tui /usr/local/bin/
 helm-tui --version
 ```
 
