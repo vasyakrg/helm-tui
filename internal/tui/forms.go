@@ -22,6 +22,8 @@ type field struct {
 func newField(label, placeholder string, password bool) field {
 	ti := textinput.New()
 	ti.Placeholder = placeholder
+	ti.SetWidth(dialogInputWidth)
+	ti.Prompt = ""
 	if password {
 		ti.EchoMode = textinput.EchoPassword
 	}
@@ -184,16 +186,19 @@ func (f *addForm) submit(a *app) tea.Cmd {
 	}
 }
 
-func (f *addForm) View() string {
-	return "add repository\n" + f.viewFields()
-}
+func (f *addForm) modalTitle() string { return "Add repository" }
+
+func (f *addForm) View() string { return f.viewFields() }
 
 func (f *addForm) hints() string { return "tab next  enter submit  ctrl+u clear field  esc cancel" }
 
-// confirmDialog asks a yes/no question.
+// confirmDialog asks a yes/no question. The default choice is "No" so a stray
+// Enter never confirms a destructive action.
 type confirmDialog struct {
+	heading  string
 	title    string
 	onYes    func(a *app, self screen) tea.Cmd
+	yes      bool // the focused button is "Yes"
 	answered bool
 	err      string
 }
@@ -203,11 +208,20 @@ func (d *confirmDialog) setOpError(text string) {
 	d.answered = false
 }
 
-func newConfirmDialog(title string, onYes func(a *app, self screen) tea.Cmd) *confirmDialog {
-	return &confirmDialog{title: title, onYes: onYes}
+func newConfirmDialog(heading, title string, onYes func(a *app, self screen) tea.Cmd) *confirmDialog {
+	return &confirmDialog{heading: heading, title: title, onYes: onYes}
 }
 
 func (d *confirmDialog) Init(*app) tea.Cmd { return nil }
+
+func (d *confirmDialog) confirm(a *app) tea.Cmd {
+	if d.answered {
+		return nil
+	}
+	d.answered = true
+	d.err = ""
+	return d.onYes(a, d)
+}
 
 func (d *confirmDialog) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
@@ -216,29 +230,46 @@ func (d *confirmDialog) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	}
 	switch key.String() {
 	case "y", "Y":
+		return d, d.confirm(a)
+	case "n", "N":
 		if !d.answered {
-			d.answered = true
-			d.err = ""
-			return d, d.onYes(a, d)
+			return d, func() tea.Msg { return popScreenMsg{} }
+		}
+	case "left", "right", "h", "l", "tab", "shift+tab":
+		d.yes = !d.yes
+	case "enter":
+		if d.yes {
+			return d, d.confirm(a)
+		}
+		if !d.answered {
+			return d, func() tea.Msg { return popScreenMsg{} }
 		}
 	}
 	return d, nil
 }
 
+func (d *confirmDialog) modalTitle() string { return d.heading }
+
 func (d *confirmDialog) View() string {
+	yes, no := buttonStyle.Render("Yes"), buttonSelectedStyle.Render("No")
+	if d.yes {
+		yes, no = buttonSelectedStyle.Render("Yes"), buttonStyle.Render("No")
+	}
 	out := d.title + "\n"
 	if d.err != "" {
-		out += errStyle.Render(d.err) + "\n"
+		out += "\n" + errStyle.Render(d.err) + "\n"
 	}
-	return out
+	return out + "\n" + yes + "  " + no
 }
 
-func (d *confirmDialog) hints() string { return "y confirm  esc cancel" }
+func (d *confirmDialog) hints() string {
+	return "y yes  n no  ←/→ choose  enter select  esc cancel"
+}
 
 // newDeleteDialog confirms and performs repo deletion.
 func newDeleteDialog(row RepoRow) *confirmDialog {
 	name := row.Repo.Name
-	return newConfirmDialog("delete repository "+name+"?", func(a *app, self screen) tea.Cmd {
+	return newConfirmDialog("Delete repository", "Delete repository "+name+"?\nIts proxy setting is removed too.", func(a *app, self screen) tea.Cmd {
 		return func() tea.Msg {
 			err := a.deps.Helm.Remove(context.Background(), name)
 			if err == nil {
@@ -317,9 +348,10 @@ func (f *proxyForm) View() string {
 	if cur == "" {
 		cur = "none"
 	}
-	return "proxy for " + f.repo + "\n" +
-		dimStyle.Render("current: "+cur) + "\n" + f.viewFields()
+	return dimStyle.Render("current: "+cur) + "\n\n" + f.viewFields()
 }
+
+func (f *proxyForm) modalTitle() string { return "Proxy for " + f.repo }
 
 func (f *proxyForm) hints() string {
 	return "enter save (empty = no change)  ctrl+d clear proxy  esc cancel"

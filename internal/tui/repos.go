@@ -143,10 +143,14 @@ func (s *reposScreen) onClose() {
 func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case reposLoadedMsg:
-		s.rows = msg.Rows
+		first := s.healthGen == 0
+		s.rows = s.mergeStates(msg.Rows)
 		s.loading = false
 		s.clampCursor()
-		return s, s.startHealth(a)
+		if first {
+			return s, s.startHealth(a) // availability check on entry only
+		}
+		return s, nil
 
 	case reposLoadFailedMsg:
 		s.loading = false
@@ -228,6 +232,27 @@ func (s *reposScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 		}
 	}
 	return s, nil
+}
+
+// mergeStates carries the known availability of already listed repos over to
+// freshly loaded rows; repos not seen before stay unchecked until the user
+// runs a check (r).
+func (s *reposScreen) mergeStates(rows []RepoRow) []RepoRow {
+	if s.healthGen == 0 {
+		return rows
+	}
+	old := make(map[string]RepoRow, len(s.rows))
+	for _, r := range s.rows {
+		old[r.Repo.Name] = r
+	}
+	for i := range rows {
+		if o, ok := old[rows[i].Repo.Name]; ok {
+			rows[i].State, rows[i].Latency, rows[i].Reason = o.State, o.Latency, o.Reason
+		} else {
+			rows[i].State = health.Unchecked
+		}
+	}
+	return rows
 }
 
 func (s *reposScreen) clampCursor() {
@@ -314,4 +339,4 @@ func pad(s string, w int) string {
 }
 
 // hintRepos is the bottom hint line of the Repos screen.
-const hintRepos = "a add  d delete  u update  U update all  p proxy  r recheck  / search  Enter open  q quit"
+const hintRepos = "a add  d delete  u update  U update all  p proxy  r check status  / search  Enter open  q quit"

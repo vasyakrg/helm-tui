@@ -8,10 +8,12 @@ and diff any two versions of a chart.
 
 ## Features
 
-- **Repository list** with chart counts and a live availability check on
-  start (`●` ok with latency, `✕` failed with a short reason, `…` checking).
-- **Add / delete / update** repositories (single or all) — everything goes
-  through the `helm` CLI, `repositories.yaml` is never edited directly.
+- **Repository list** with chart counts and an availability check that runs
+  on start and on demand (`r`): `●` ok with latency, `✕` failed with a short
+  reason, `…` checking, `·` not checked yet (e.g. a repository added later).
+- **Add / delete / update** repositories (single or all) in modal dialogs —
+  everything goes through the `helm` CLI, `repositories.yaml` is never edited
+  directly. Delete asks for confirmation with "No" as the default.
 - **Per-repository proxy** (`http://`, `https://`, `socks5://`) for sources
   that get blocked from time to time. Used for the availability check, `add`,
   `update` and `pull`.
@@ -21,13 +23,16 @@ and diff any two versions of a chart.
 - **Charts and versions** per repository with release dates and app versions.
 - **Diff two versions** of a chart: both are pulled into a temporary
   workspace and compared file by file (`Chart.yaml`, `values.yaml`,
-  `templates/`, `crds/`, …).
+  `templates/`, `crds/`, …). Files on the left, scrollable diff on the right
+  (vertical and horizontal).
 
 | Global search | Versions |
 |---|---|
 | ![Search](docs/screenshots/search.png) | ![Versions](docs/screenshots/versions.png) |
 
 ![Diff](docs/screenshots/diff.png)
+
+![Delete dialog](docs/screenshots/dialog.png)
 
 ## Requirements
 
@@ -89,7 +94,7 @@ The UI reads the same repository configuration and cache as `helm` itself
 | `u` | update the selected repository (`helm repo update <name>`) |
 | `U` | update all repositories (one failure does not stop the rest) |
 | `p` | set the proxy of the selected repository (`ctrl+d` clears it) |
-| `r` | re-run availability checks |
+| `r` | check availability of all repositories (also runs once on start) |
 | `/` | global search |
 | `q`, `Esc` | quit / back |
 
@@ -112,10 +117,13 @@ files and `*.tgz` are marked as changed without contents.
 
 | Key | Action |
 |-----|--------|
-| `j`/`k` | previous / next file |
+| `j`/`k`, `g`/`G` | file list focused: previous / next file, first / last |
+| `Tab`, `Enter`, `l` | focus the diff pane (`Tab` toggles back) |
+| `j`/`k`, `g`/`G` | diff pane focused: scroll by line, top / end |
+| `h`/`l` (`←`/`→`) | diff pane focused: pan horizontally (`0` resets); `h` at column 0 returns to the files |
 | `n`/`N` | next / previous hunk |
-| `pgup`/`pgdn`, `ctrl+u`/`ctrl+d` | scroll |
-| `Esc` | back (the workspace is removed) |
+| `pgup`/`pgdn`, `ctrl+u`/`ctrl+d` | scroll the diff by a page |
+| `Esc` | diff pane focused: back to the file list; otherwise leave (the workspace is removed) |
 
 Versions are pulled with `helm pull --untar` into `/tmp/helm-tui-<id>`. The
 directory is removed when you leave the screen or quit, including on

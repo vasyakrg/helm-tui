@@ -26,6 +26,9 @@ const (
 	Checking State = iota
 	OK
 	Fail
+	// Unchecked means no check has been run for the repository yet
+	// (e.g. it was added after the last check run).
+	Unchecked
 )
 
 // Result is the outcome of checking one repository.

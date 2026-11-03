@@ -242,3 +242,73 @@ func TestDiff_TitleIsOldToNew(t *testing.T) {
 		t.Errorf("title:\n%s", v)
 	}
 }
+
+func TestDiff_FilesLeftDiffRight(t *testing.T) {
+	s := &fakeSession{files: []diff.FileDiff{bigDiffFile()}}
+	a := newDiffApp(t, s)
+	a = send(t, a, tea.WindowSizeMsg{Width: 100, Height: 20}, diffResultMsg{Files: s.files})
+	var found bool
+	for _, line := range strings.Split(plain(a.View()), "\n") {
+		li, ri := strings.Index(line, "values.yaml"), strings.Index(line, "ctx 0")
+		if li >= 0 && ri > li && strings.Contains(line, "│") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("file list must be on the left and the diff on the right:\n%s", plain(a.View()))
+	}
+}
+
+func TestDiff_FocusedPaneScrollsLineByLineAndEscReturns(t *testing.T) {
+	s := &fakeSession{files: []diff.FileDiff{bigDiffFile(), {Path: "z.yaml", Status: diff.Modified}}}
+	a := newDiffApp(t, s)
+	a = send(t, a, tea.WindowSizeMsg{Width: 100, Height: 14}, diffResultMsg{Files: s.files})
+	a = send(t, a, key("j")) // file list focus: selects next file
+	if ds := a.top().(*diffScreen); ds.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", ds.cursor)
+	}
+	a = send(t, a, key("k"), key("tab"))
+	ds := a.top().(*diffScreen)
+	if !ds.focusDiff {
+		t.Fatal("tab must focus the diff pane")
+	}
+	a = send(t, a, key("j"), key("j"), key("j"))
+	if ds.cursor != 0 || ds.scroll != 3 {
+		t.Fatalf("j in diff pane must scroll: cursor=%d scroll=%d", ds.cursor, ds.scroll)
+	}
+	a = send(t, a, key("G"))
+	if ds.scroll != ds.maxScroll() || ds.scroll == 0 {
+		t.Errorf("G must scroll to the end: %d/%d", ds.scroll, ds.maxScroll())
+	}
+	a = send(t, a, key("esc"))
+	if _, ok := a.top().(*diffScreen); !ok || ds.focusDiff {
+		t.Fatalf("esc must return focus to the file list, top=%T focus=%v", a.top(), ds.focusDiff)
+	}
+}
+
+func TestDiff_LongLinesPanHorizontally(t *testing.T) {
+	long := strings.Repeat("0123456789", 30) + "END"
+	s := &fakeSession{files: []diff.FileDiff{{
+		Path: "values.yaml", Status: diff.Modified,
+		Lines: []diff.Line{{Kind: '+', Text: long}},
+	}}}
+	a := newDiffApp(t, s)
+	a = send(t, a, tea.WindowSizeMsg{Width: 100, Height: 14}, diffResultMsg{Files: s.files})
+	if contains(plain(a.View()), "END") {
+		t.Fatal("long line must be cut at the pane edge")
+	}
+	a = send(t, a, key("tab"))
+	for i := 0; i < 60 && !contains(plain(a.View()), "END"); i++ {
+		a = send(t, a, key("l"))
+	}
+	if !contains(plain(a.View()), "END") {
+		t.Errorf("panning right must reveal the end of the line:\n%s", plain(a.View()))
+	}
+	for i := 0; i < 60; i++ {
+		a = send(t, a, key("h"))
+	}
+	ds := a.top().(*diffScreen)
+	if ds.hscroll != 0 || ds.focusDiff {
+		t.Errorf("panning back to column 0 then h returns focus: hscroll=%d focus=%v", ds.hscroll, ds.focusDiff)
+	}
+}

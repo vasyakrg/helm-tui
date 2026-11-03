@@ -69,8 +69,16 @@ func TestChrome_EveryScreenHasHint(t *testing.T) {
 	for want, sc := range screens {
 		a := send(t, New(deps), pushScreenMsg{Screen: sc})
 		a = sized(t, a, 100, 20)
-		if !contains(lastLine(plain(a.View())), want) {
-			t.Errorf("%T: hint %q missing in last line %q", sc, want, lastLine(plain(a.View())))
+		v := plain(a.View())
+		if _, isModal := sc.(modal); isModal {
+			// dialogs carry their hints inside the box
+			if !contains(v, want) {
+				t.Errorf("%T: hint %q missing:\n%s", sc, want, v)
+			}
+			continue
+		}
+		if !contains(lastLine(v), want) {
+			t.Errorf("%T: hint %q missing in last line %q", sc, want, lastLine(v))
 		}
 	}
 }

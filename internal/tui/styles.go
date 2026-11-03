@@ -34,6 +34,8 @@ func statusMark(state health.State) string {
 		return checkingStyle.Render("…")
 	case health.OK:
 		return okStyle.Render("●")
+	case health.Unchecked:
+		return dimStyle.Render("·")
 	default:
 		return failStyle.Render("✕")
 	}

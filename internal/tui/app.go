@@ -328,21 +328,44 @@ func (a *app) View() tea.View {
 	if w <= 0 {
 		w = 80
 	}
-	content := strings.TrimRight(a.top().View(), "\n")
+	var content string
+	if _, ok := a.top().(modal); ok {
+		content = overlayCenter(a.frame(a.baseScreen(), w), renderDialog(a.top(), a.width), a.width, a.height)
+	} else {
+		content = a.frame(a.top(), w)
+	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
+}
+
+// baseScreen is the nearest non-modal screen below the top one; dialogs are
+// drawn over it.
+func (a *app) baseScreen() screen {
+	for i := len(a.stack) - 1; i >= 0; i-- {
+		if _, ok := a.stack[i].(modal); !ok {
+			return a.stack[i]
+		}
+	}
+	return a.stack[0]
+}
+
+// frame renders a screen with the status line on top and the hint line at the
+// bottom.
+func (a *app) frame(s screen, w int) string {
+	content := strings.TrimRight(s.View(), "\n")
 	used := strings.Count(content, "\n") + 1
 	if a.status != "" {
 		content = errStyle.Render(truncate(a.status, w)) + "\n" + content
 		used++
 	}
-	if h, ok := a.top().(hinter); ok {
+	if h, ok := s.(hinter); ok {
 		if a.height > 0 && used < a.height-1 {
 			content += strings.Repeat("\n", a.height-1-used)
 		}
 		content += "\n" + hintStyle.Render(truncate(h.hints(), w))
 	}
-	v := tea.NewView(content)
-	v.AltScreen = true
-	return v
+	return content
 }
 
 func maxInt(a, b int) int {

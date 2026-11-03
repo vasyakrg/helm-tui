@@ -8,6 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/vasyakrg/helm-tui/internal/diff"
 	"github.com/vasyakrg/helm-tui/internal/index"
 	"github.com/vasyakrg/helm-tui/internal/proxy"
@@ -68,8 +70,12 @@ type diffScreen struct {
 	fileTop int // first visible row of the file list
 	hunk    int // index of the selected hunk in the current file, -1 = none
 	scroll  int // first visible line of the diff pane
-	err     error
-	loading bool
+	hscroll int // first visible column of the diff pane
+	// focusDiff: the diff pane has the focus (j/k scroll it); otherwise the
+	// file list does.
+	focusDiff bool
+	err       error
+	loading   bool
 
 	winSize
 }
@@ -84,31 +90,57 @@ func newDiffScreen(repo, chart, v1, v2 string) *diffScreen {
 	return &diffScreen{repo: repo, chart: chart, v1: v1, v2: v2, loading: true, hunk: -1}
 }
 
-func (s *diffScreen) hints() string { return hintDiff }
+func (s *diffScreen) hints() string {
+	if s.focusDiff {
+		return hintDiffPane
+	}
+	return hintDiff
+}
 
-// layout returns the number of rows for the file list and the diff pane.
-// The height is the body height; two rows go to title and file header.
+// consumeEsc returns focus from the diff pane to the file list instead of
+// leaving the screen.
+func (s *diffScreen) consumeEsc(*app) bool {
+	if s.focusDiff {
+		s.focusDiff = false
+		return true
+	}
+	return false
+}
+
+const (
+	diffMinListW = 24
+	diffMaxListW = 48
+	diffSepW     = 3 // " │ "
+	hscrollStep  = 8
+)
+
+// paneWidths splits the window into the file list (left) and the diff (right).
+func (s *diffScreen) paneWidths() (left, right int) {
+	w := s.widthOr(80)
+	left = w * 35 / 100
+	if left < diffMinListW {
+		left = diffMinListW
+	}
+	if left > diffMaxListW {
+		left = diffMaxListW
+	}
+	if left > w-diffSepW-10 { // keep some room for the diff on narrow windows
+		left = maxInt(w-diffSepW-10, 8)
+	}
+	right = maxInt(w-left-diffSepW, 1)
+	return left, right
+}
+
+// layout returns the number of rows of the file list and of the diff pane
+// (both exclude the pane header). The body height holds the title row, the
+// pane headers and the panes.
 func (s *diffScreen) layout() (fileRows, diffRows int) {
 	h := s.height
 	if h <= 0 {
 		h = 24
 	}
-	body := h - 2
-	if body < 2 {
-		body = 2
-	}
-	fileRows = body / 3
-	if fileRows < 1 {
-		fileRows = 1
-	}
-	if fileRows > len(s.files) {
-		fileRows = len(s.files)
-	}
-	diffRows = body - fileRows
-	if diffRows < 1 {
-		diffRows = 1
-	}
-	return fileRows, diffRows
+	rows := maxInt(h-2, 1)
+	return rows, rows
 }
 
 func (s *diffScreen) maxScroll() int {
@@ -129,11 +161,37 @@ func (s *diffScreen) setScroll(v int) {
 	s.scroll = v
 }
 
+// maxHScroll is the largest useful horizontal offset of the current file.
+func (s *diffScreen) maxHScroll() int {
+	if s.cursor >= len(s.files) {
+		return 0
+	}
+	_, rw := s.paneWidths()
+	longest := 0
+	for _, l := range s.files[s.cursor].Lines {
+		longest = maxInt(longest, lipglossWidth(expandTabs(l.Text))+1)
+	}
+	return maxInt(longest-rw, 0)
+}
+
+func (s *diffScreen) setHScroll(v int) {
+	if v > s.maxHScroll() {
+		v = s.maxHScroll()
+	}
+	if v < 0 {
+		v = 0
+	}
+	s.hscroll = v
+}
+
 func (s *diffScreen) selectFile(i int) {
 	s.cursor = i
 	s.hunk = -1
 	s.scroll = 0
+	s.hscroll = 0
 }
+
+func expandTabs(t string) string { return strings.ReplaceAll(t, "\t", "    ") }
 
 func (s *diffScreen) Init(a *app) tea.Cmd {
 	if a.deps.Diff == nil {
@@ -179,14 +237,8 @@ func (s *diffScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 	case tea.KeyPressMsg:
 		_, diffRows := s.layout()
 		switch msg.String() {
-		case "j", "down":
-			if s.cursor < len(s.files)-1 {
-				s.selectFile(s.cursor + 1)
-			}
-		case "k", "up":
-			if s.cursor > 0 {
-				s.selectFile(s.cursor - 1)
-			}
+		case "tab", "shift+tab":
+			s.focusDiff = !s.focusDiff
 		case "n":
 			s.jumpHunk(1)
 		case "N":
@@ -197,9 +249,66 @@ func (s *diffScreen) Update(msg tea.Msg, a *app) (screen, tea.Cmd) {
 			s.setScroll(s.scroll - maxInt(diffRows/2, 1))
 		case "q":
 			return s, func() tea.Msg { return quitMsg{} }
+		default:
+			if s.focusDiff {
+				s.diffPaneKey(msg.String())
+			} else {
+				s.listKey(msg.String())
+			}
 		}
 	}
 	return s, nil
+}
+
+// listKey handles keys while the file list has the focus.
+func (s *diffScreen) listKey(k string) {
+	switch k {
+	case "j", "down":
+		if s.cursor < len(s.files)-1 {
+			s.selectFile(s.cursor + 1)
+		}
+	case "k", "up":
+		if s.cursor > 0 {
+			s.selectFile(s.cursor - 1)
+		}
+	case "g", "home":
+		if len(s.files) > 0 {
+			s.selectFile(0)
+		}
+	case "G", "end":
+		if len(s.files) > 0 {
+			s.selectFile(len(s.files) - 1)
+		}
+	case "enter", "right", "l":
+		if len(s.files) > 0 {
+			s.focusDiff = true
+		}
+	}
+}
+
+// diffPaneKey handles keys while the diff pane has the focus: line and column
+// scrolling.
+func (s *diffScreen) diffPaneKey(k string) {
+	switch k {
+	case "j", "down":
+		s.setScroll(s.scroll + 1)
+	case "k", "up":
+		s.setScroll(s.scroll - 1)
+	case "g", "home":
+		s.setScroll(0)
+	case "G", "end":
+		s.setScroll(s.maxScroll())
+	case "l", "right":
+		s.setHScroll(s.hscroll + hscrollStep)
+	case "h", "left":
+		if s.hscroll == 0 {
+			s.focusDiff = false // nothing to pan back: return to the files
+			return
+		}
+		s.setHScroll(s.hscroll - hscrollStep)
+	case "0":
+		s.setHScroll(0)
+	}
 }
 
 // jumpHunk selects the next (dir>0) or previous hunk of the current file and
@@ -227,6 +336,21 @@ func (s *diffScreen) jumpHunk(dir int) {
 // jumping to it.
 const hunkLeadContext = 2
 
+// truncateLeft keeps the tail of s (the file name) when it does not fit.
+func truncateLeft(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	w := lipglossWidth(s)
+	if w <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	return ansi.TruncateLeft(s, w-(width-1), "…")
+}
+
 func (s *diffScreen) View() string {
 	title := titleStyle.Render(s.chart + " " + s.v1 + " → " + s.v2)
 	switch {
@@ -237,47 +361,29 @@ func (s *diffScreen) View() string {
 	case len(s.files) == 0:
 		return title + "\n" + "no differences"
 	}
-	width := s.widthOr(80)
 	if s.cursor >= len(s.files) {
 		s.cursor = len(s.files) - 1
 	}
-	fileRows, diffRows := s.layout()
+	lw, rw := s.paneWidths()
+	rows, _ := s.layout()
 	sel := s.files[s.cursor]
+	s.setScroll(s.scroll)
+	s.setHScroll(s.hscroll)
 
-	var b strings.Builder
-	b.WriteString(title + " · " + strconv.Itoa(len(s.files)) + " files changed\n")
-
-	// file list, windowed around the cursor
+	// file list window around the cursor
 	if s.cursor < s.fileTop {
 		s.fileTop = s.cursor
 	}
-	if s.cursor >= s.fileTop+fileRows {
-		s.fileTop = s.cursor - fileRows + 1
+	if s.cursor >= s.fileTop+rows {
+		s.fileTop = s.cursor - rows + 1
 	}
-	for i := s.fileTop; i < len(s.files) && i < s.fileTop+fileRows; i++ {
-		f := s.files[i]
-		prefix := "  "
-		st := normalStyle
-		if i == s.cursor {
-			prefix = "> "
-			st = selectedStyle
-		}
-		mark := modifiedStyle.Render("~")
-		switch f.Status {
-		case diff.Added:
-			mark = addedStyle.Render("+")
-		case diff.Removed:
-			mark = removedStyle.Render("-")
-		}
-		note := ""
-		if f.Binary {
-			note = dimStyle.Render(" (binary)")
-		}
-		b.WriteString(prefix + mark + " " + st.Render(truncate(f.Path, maxInt(width-14, 10))) + note + "\n")
+	if s.fileTop > len(s.files)-rows {
+		s.fileTop = maxInt(len(s.files)-rows, 0)
 	}
 
-	// header of the diff pane
-	pos := "file " + strconv.Itoa(s.cursor+1) + "/" + strconv.Itoa(len(s.files))
+	// pane headers
+	listHdr := "FILES " + strconv.Itoa(s.cursor+1) + "/" + strconv.Itoa(len(s.files))
+	pos := sel.Path
 	if n := len(sel.HunkStarts); n > 0 {
 		h := "-"
 		if s.hunk >= 0 {
@@ -285,32 +391,75 @@ func (s *diffScreen) View() string {
 		}
 		pos += "  hunk " + h + "/" + strconv.Itoa(n)
 	}
-	if sel.Binary {
-		b.WriteString(dimStyle.Render(truncate(sel.Path+"  "+pos, width)) + "\n")
-		b.WriteString(dimStyle.Render("binary file, contents not shown"))
-		return b.String()
-	}
-	if total := len(sel.Lines); total > 0 {
-		end := minInt(s.scroll+diffRows, total)
+	if total := len(sel.Lines); total > 0 && !sel.Binary {
+		end := minInt(s.scroll+rows, total)
 		pos += "  lines " + strconv.Itoa(s.scroll+1) + "-" + strconv.Itoa(end) + "/" + strconv.Itoa(total)
 	}
-	b.WriteString(dimStyle.Render(truncate(sel.Path+"  "+pos, width)))
+	if s.hscroll > 0 {
+		pos += "  col " + strconv.Itoa(s.hscroll+1)
+	}
+	hdrL, hdrR := dimStyle, dimStyle
+	if s.focusDiff {
+		hdrR = selectedStyle
+	} else {
+		hdrL = selectedStyle
+	}
 
-	// visible window of the line diff
-	s.setScroll(s.scroll)
-	for i := s.scroll; i < len(sel.Lines) && i < s.scroll+diffRows; i++ {
-		l := sel.Lines[i]
-		style := contextStyle
-		switch l.Kind {
-		case '+':
-			style = addedStyle
-		case '-':
-			style = removedStyle
-		}
-		text := strings.ReplaceAll(l.Text, "\t", "    ")
-		b.WriteString("\n" + style.Render(string(l.Kind)+truncate(text, maxInt(width-1, 1))))
+	var b strings.Builder
+	b.WriteString(title + " · " + strconv.Itoa(len(s.files)) + " files changed\n")
+	sep := dimStyle.Render(" │ ")
+	b.WriteString(pad(hdrL.Render(truncate(listHdr, lw)), lw) + sep + hdrR.Render(truncateLeft(pos, rw)))
+	for i := 0; i < rows; i++ {
+		b.WriteString("\n" + pad(s.fileCell(s.fileTop+i, lw), lw) + sep + s.diffCell(sel, i, rw))
 	}
 	return b.String()
+}
+
+// fileCell renders one row of the file list ("" past the end).
+func (s *diffScreen) fileCell(i, width int) string {
+	if i >= len(s.files) {
+		return ""
+	}
+	f := s.files[i]
+	prefix := "  "
+	st := normalStyle
+	if i == s.cursor {
+		prefix = "> "
+		st = selectedStyle
+	}
+	mark := modifiedStyle.Render("~")
+	switch f.Status {
+	case diff.Added:
+		mark = addedStyle.Render("+")
+	case diff.Removed:
+		mark = removedStyle.Render("-")
+	}
+	return prefix + mark + " " + st.Render(truncateLeft(f.Path, maxInt(width-4, 1)))
+}
+
+// diffCell renders row i of the visible window of the selected file's diff,
+// panned horizontally by hscroll.
+func (s *diffScreen) diffCell(sel diff.FileDiff, i, width int) string {
+	if sel.Binary {
+		if i == 0 {
+			return dimStyle.Render("binary file, contents not shown")
+		}
+		return ""
+	}
+	idx := s.scroll + i
+	if idx >= len(sel.Lines) {
+		return ""
+	}
+	l := sel.Lines[idx]
+	style := contextStyle
+	switch l.Kind {
+	case '+':
+		style = addedStyle
+	case '-':
+		style = removedStyle
+	}
+	text := string(l.Kind) + expandTabs(l.Text)
+	return style.Render(ansi.Cut(text, s.hscroll, s.hscroll+width))
 }
 
 func minInt(a, b int) int {
@@ -320,4 +469,7 @@ func minInt(a, b int) int {
 	return b
 }
 
-const hintDiff = "j/k file  n/N hunk  pgup/pgdn scroll  esc back"
+const (
+	hintDiff     = "j/k file  tab/enter diff pane  n/N hunk  pgup/pgdn scroll  esc back"
+	hintDiffPane = "j/k scroll  h/l pan  g/G top/end  n/N hunk  tab files  esc files"
+)
