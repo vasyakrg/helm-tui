@@ -41,6 +41,14 @@ and diff any two versions of a chart.
 
 ## Install
 
+### Homebrew (macOS arm64, Linux)
+
+```sh
+brew tap vasyakrg/tap
+brew install helm-tui
+brew upgrade helm-tui   # update
+```
+
 ### From a release
 
 Download the archive for your platform from the
@@ -169,6 +177,10 @@ make build      # bin/helm-tui
 make release    # dist/*.tar.gz for darwin/arm64, linux/arm64, linux/amd64 + checksums.txt
                 # SIGN_IDENTITY / NOTARY_PROFILE enable signing + notarization of the darwin binary
 ```
+
+After publishing a release, update the Homebrew tap
+([vasyakrg/homebrew-tap](https://github.com/vasyakrg/homebrew-tap)):
+`scripts/formula.sh > Formula/helm-tui.rb`, then commit and push it there.
 
 The version is stored in the `VERSION` file and shared by all release
 artifacts.
